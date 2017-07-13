@@ -308,6 +308,10 @@ Use `-v` to increase verbosity level (can be supplied multiple times e.g -vv).
 
     # Subparser for rapidfire command.
     p_rapid = subparsers.add_parser('rapid', parents=[copts_parser], help="Run all tasks in rapidfire mode.")
+    
+    # Subparser for finalize command.
+    p_rapid = subparsers.add_parser('finalize', parents=[copts_parser], help="Finalize works.")
+
 
     # Subparser for scheduler command.
     p_scheduler = subparsers.add_parser('scheduler', parents=[copts_parser],
@@ -697,6 +701,20 @@ Specify the files to open. Possible choices:
         nlaunch = flow.rapidfire()
         print("Number of tasks launched: %d" % nlaunch)
         if nlaunch: flow.show_status()
+
+    elif options.command == "finalize":
+        for work in flow.works:
+            try:
+                work.merge_ddb_files()
+                work.merge_pot1_files()
+                print("DDB file merged")
+            except:
+                pass
+        flow.finalize()
+        flow.pickle_dump()
+        #print("Number of tasks launched: %d" % nlaunch)
+        #if nlaunch: flow.show_status()
+
 
     elif options.command == "scheduler":
         # Check that the env on the local machine is properly configured before starting the scheduler.
