@@ -20,7 +20,6 @@ from pymatgen.serializers.pickle_coders import SlotPickleMixin
 from abipy.iotools import ETSF_Reader
 from abipy.tools.derivatives import finite_diff
 from abipy.tools.numtools import add_periodic_replicas
-
 #from numba import jit
 
 import logging
@@ -37,6 +36,7 @@ __all__ = [
     "rc_list",
     "kmesh_from_mpdivs",
     "Ktables",
+    "find_points_along_path",
 ]
 
 # Tolerance used to compare k-points.
@@ -188,7 +188,7 @@ def kmesh_from_mpdivs(mpdivs, shifts, pbc=False, order="bz"):
         order: "unit_cell" if the kpoint coordinates must be in [0,1)
                "bz" if the kpoint coordinates must be in [-1/2, +1/2)
     """
-    shifts = np.reshape(shifts, (-1,3))
+    shifts = np.reshape(shifts, (-1, 3))
     assert np.all(np.abs(shifts) <= 0.5)
 
     # Build k-point grid.
@@ -204,9 +204,9 @@ def kmesh_from_mpdivs(mpdivs, shifts, pbc=False, order="bz"):
     return np.array(kbz)
 
 
-def map_bz2ibz(structure, ibz, ngkpt, has_timrev, pbc=False):
+def map_grid2ibz(structure, ibz, ngkpt, has_timrev, pbc=False):
     """
-    Compute the correspondence between the list of k-points in the *unit cell*
+    Compute the correspondence between a *grid* of k-points in the *unit cell*
     associated to the `ngkpt` mesh and the corresponding points in the IBZ.
     Requires structure with Abinit symmetries.
     This routine is mainly used to symmetrize eigenvalues in the unit cell
@@ -214,7 +214,7 @@ def map_bz2ibz(structure, ibz, ngkpt, has_timrev, pbc=False):
 
     Args:
         structure: Structure with (Abinit) symmetry operations.
-        ibz: [*,3] array with reduced coordinates in the in the IBZ.
+        ibz: [*, 3] array with reduced coordinates in the in the IBZ.
         ngkpt: Mesh divisions.
         has_timrev: True if time-reversal can be used.
         pbc: True if the mesh should contain the periodic images (closed mesh).
@@ -227,7 +227,7 @@ def map_bz2ibz(structure, ibz, ngkpt, has_timrev, pbc=False):
     # Extract (FM) symmetry operations in reciprocal space.
     abispg = structure.abi_spacegroup
     if abispg is None:
-        raise ValueError("Structure does not contain the Abinit spacegroup!")
+        raise ValueError("Structure does not contain Abinit spacegroup info!")
 
     # Extract rotations in reciprocal space (FM part).
     symrec_fm = [o.rot_g for o in abispg.fm_symmops]
@@ -246,18 +246,17 @@ def map_bz2ibz(structure, ibz, ngkpt, has_timrev, pbc=False):
                 bzgrid2ibz[gp_bz[0], gp_bz[1], gp_bz[2]] = ik_ibz
 
     if pbc:
-        # Add periodical replicas.
+        # Add periodic replicas.
         bzgrid2ibz = add_periodic_replicas(bzgrid2ibz)
 
-    bz2ibz = bzgrid2ibz.flatten()
-
-    if np.any(bz2ibz == -1):
-        #for ik_bz, ik_ibz in enumerate(self.bz2ibz): print(ik_bz, ">>>", ik_ibz)
-        msg = "Found %s/%s invalid entries in bz2ibz array" % ((bz2ibz == -1).sum(), len(bz2ibz))
+    if np.any(bzgrid2ibz == -1):
+        #for ik_bz, ik_ibz in enumerate(self.bzgrid2ibz): print(ik_bz, ">>>", ik_ibz)
+        msg = "Found %s/%s invalid entries in bzgrid2ibz array" % ((bzgrid2ibz == -1).sum(), bzgrid2ibz.size)
         msg += "This can happen if there an inconsistency between the input IBZ and ngkpt"
         msg += "ngkpt: %s, has_timrev: %s" % (str(ngkpt), has_timrev)
         raise ValueError(msg)
 
+    bz2ibz = bzgrid2ibz.flatten()
     return bz2ibz
 
     """
@@ -590,12 +589,12 @@ class Kpoint(SlotPickleMixin):
         return np.any(diff < _ATOL_KDIFF)
 
     def __repr__(self):
-        return "[%.3f, %.3f, %.3f]" % tuple(self.frac_coords)
+        return "[%+.3f, %+.3f, %+.3f]" % tuple(self.frac_coords)
 
     def __str__(self):
-        s =  "[%.3f, %.3f, %.3f]" % tuple(self.frac_coords)
-        if self.name is not None: s += ", name=%s" % self.name
-        if self._weight is not None: s += ", weight=%.3f" % self.weight
+        s =  "[%+.3f, %+.3f, %+.3f]" % tuple(self.frac_coords)
+        if self.name is not None: s += ", name: %s" % self.name
+        if self._weight is not None: s += ", weight: %.3f" % self.weight
         return s
 
     # Kpoint algebra.
@@ -768,18 +767,6 @@ class KpointList(collections.Sequence):
             name = None if names is None else names[i]
             self._points.append(Kpoint(rcs, self.reciprocal_lattice, weight=weights[i], name=name))
 
-    #@classmethod
-    #def from_file(cls, filepath):
-    #    """Initialize the object from file."""
-    #    if filepath.endswith(".nc"):
-    #        with KpointsReader(filepath) as r:
-    #            new = r.read_kpoints()
-    #    else:
-    #        raise NotImplementedError("Only netcdf files are supported.")
-
-    #    new.__class__ = cls
-    #    return new
-
     @property
     def reciprocal_lattice(self):
         """`Lattice` object defining the reciprocal lattice."""
@@ -914,10 +901,12 @@ class KpointList(collections.Sequence):
 
     @property
     def frac_coords(self):
-        """
-        Fractional coordinates of the k-point as `ndarray` of shape (len(self), 3)
-        """
+        """Fractional coordinates of the k-point as `ndarray` of shape (len(self), 3)"""
         return self._frac_coords
+
+    def get_cart_coords(self):
+        """Cartesian coordinates of the k-point as `ndarray` of shape (len(self), 3)"""
+        return np.reshape([k.cart_coords for k in self], (-1, 3))
 
     @property
     def names(self):
@@ -971,18 +960,52 @@ class KpointList(collections.Sequence):
         """Plot k-points with matplotlib."""
         from pymatgen.electronic_structure.plotter import plot_brillouin_zone
         fold = False
-
         if self.is_path:
             labels = {k.name: k.frac_coords for k in self if k.name}
             frac_coords_lines = [self.frac_coords[line] for line in self.lines]
             return plot_brillouin_zone(self.reciprocal_lattice, lines=frac_coords_lines, labels=labels,
                                        ax=ax, fold=fold, **kwargs)
         else:
-            # Not sure this works, I got points outside of the BZ in a simple with Si and Gamm-centered 8x8x8.
+            # Not sure this works, I got points outside of the BZ in a simple with Si and Gamma-centered 8x8x8.
             # Don't know if it's a bug in matplotlib or plot_brillouin_zone.
             #print(self.frac_coords)
             return plot_brillouin_zone(self.reciprocal_lattice, kpoints=self.frac_coords,
                                        ax=ax, fold=fold, **kwargs)
+
+    def get_k2kqg_map(self, qpt, atol_kdiff=None):
+        """
+        Compute mapping k_index --> (k + q)_index, g0
+
+        Args:
+            qpt: q-point in fractional coordinate or :class:`Kpoint` instance.
+            atol_kdiff: Tolerance used to compare k-points.
+                    Use _ATOL_KDIFF is atol is None.
+        """
+        if atol_kdiff is None: atol_kdiff = _ATOL_KDIFF
+        if isinstance(qpt, Kpoint):
+            qfrac_coords = qpt.frac_coords
+        else:
+            qfrac_coords = np.reshape(qpt, (3,))
+
+        k2kqg = collections.OrderedDict()
+        if np.all(np.abs(qfrac_coords) <= 1e-6):
+            # Gamma point, DOH!
+            g0 = np.zeros(3, dtype=np.int)
+            for ik, _ in enumerate(self):
+                k2kqg[ik] = (ik, g0)
+        else:
+            # N**2 scaling but this algorithm can handle k-paths
+            # Note that in principle one could have multiple k+q in k-points
+            # but only the first match is considered.
+            for ik, kpoint in enumerate(self):
+                kpq = kpoint.frac_coords + qfrac_coords
+                for ikq, ksearch in enumerate(self):
+                    if issamek(kpq, ksearch.frac_coords, atol=atol_kdiff):
+                        g0 = np.rint(kpq - ksearch.frac_coords)
+                        k2kqg[ik] = (ikq, g0)
+                        break
+
+        return k2kqg
 
 
 class KpointStar(KpointList):
@@ -1217,7 +1240,7 @@ class IrredZone(KpointList):
     def __str__(self):
         return self.to_string()
 
-    def to_string(self, **kwargs):
+    def to_string(self, func=str, verbose=0):
         """String representation."""
         lines = []; app = lines.append
 
@@ -1227,7 +1250,8 @@ class IrredZone(KpointList):
             s = ", ".join("[%.1f, %.1f, %.1f]" % tuple(s) for s in shifts)
             app("K-mesh with divisions: %s, shifts: %s, kptopt: %s" % (d, s, self.ksampling.kptopt))
         else:
-            app(str(self.ksampling))
+            app("nkpt: %d" % len(self))
+            app(self.ksampling.to_string(verbose=verbose))
 
         return "\n".join(lines)
 
@@ -1319,7 +1343,7 @@ class KSamplingInfo(AttrDict):
         try:
             return cls(**obj)
         except Exception as exc:
-            raise TypeError("Don't know how to convert %s into KSamplingInfo object:\n%s" % (type(obj), str(exc)))
+            raise TypeError("Don't know how to convert `%s` into KSamplingInfo object:\n%s" % (type(obj), str(exc)))
 
     @classmethod
     def from_mpdivs(cls, mpdivs, shifts, kptopt):
@@ -1381,15 +1405,18 @@ class KSamplingInfo(AttrDict):
                     self["mpdivs"] = None
 
     def __str__(self):
+        return self.to_string()
+
+    def to_string(self, verbose=0):
         """String representation."""
         lines = []
         app = lines.append
-        app("kptopt: %s" % str(self.kptopt))
+        app("kptopt:\n  %s" % str(self.kptopt))
         app("mpdivs: %s" % str(self.mpdivs))
-        app("kptrlatt: %s" % str(self.kptrlatt))
-        app("shifts: %s" % str(self.shifts))
-        app("kptrlatt_orig: %s" % str(self.kptrlatt_orig))
-        app("shifts_orig: %s" % str(self.shifts_orig))
+        app("kptrlatt:\n %s" % str(self.kptrlatt))
+        app("shifts:\n %s" % str(self.shifts))
+        app("kptrlatt_orig:\n %s" % str(self.kptrlatt_orig))
+        app("shifts_orig:\n %s" % str(self.shifts_orig))
 
         return "\n".join(lines)
 
@@ -1571,8 +1598,68 @@ class Ktables(object):
 
     def print_bz2ibz(self, file=sys.stdout):
         """Print BZ --> IBZ mapping."""
-        print("BZ points --> IBZ points", file=file)
+        print("BZ points --> IBZ points mapping", file=file)
         for ik_bz, ik_ibz in enumerate(self.bz2ibz):
-            print("%6d) [%9.6f, %9.6f, %9.6f], ====> %6d) [%9.6f, %9.6f, %9.6f]," %
+            print("%6d) [%9.6f, %9.6f, %9.6f], ===> %6d) [%9.6f, %9.6f, %9.6f]," %
                 (ik_bz, self.bz[ik_ibz][0], self.bz[ik_ibz][1], self.bz[ik_ibz][2],
                 ik_ibz, self.ibz[ik_ibz][0], self.ibz[ik_ibz][1], self.ibz[ik_ibz][2]), file=file)
+
+
+def dist_point_from_line(x0, x1, x2):
+    """
+    Return distance from point x0 to line x1 - x2. Cartesian coordinates are used.
+    See http://mathworld.wolfram.com/Point-LineDistance3-Dimensional.html
+    """
+    denom = x2 - x1
+    denomabs = np.sqrt(np.dot(denom, denom))
+    numer = np.cross(x0 - x1, x0 - x2)
+    numerabs = np.sqrt(np.dot(numer, numer))
+    return numerabs / denomabs
+
+
+def find_points_along_path(cart_bounds, cart_coords, dist_tol):
+    """
+    Find points in `cart_coords` lying on the path defined by `cart_bounds`.
+
+    Args:
+        cart_bounds: [N, 3] array with the boundaries of the path in Cartesian coordinates.
+        cart_coords: [M, 3] array with the points in Cartesian coordinate
+        dist_tol: A point is considered to be on the path if its distance from the line
+            is less than dist_tol.
+
+    Return:
+        (klines, dist_list, ticks)
+
+        klines is a numpy array with the indices of the points lying on the path. Empty if no point is found.
+        dist_list: numpy array with the distance of the points along the line.
+        ticks:
+    """
+    klines, dist_list, ticks = [], [], [0]
+
+    dl = 0  # cumulative length of the path
+    for ibound, x0 in enumerate(cart_bounds[:-1]):
+        x1 = cart_bounds[ibound + 1]
+        B = x0 - x1
+        #B = x1 - x0
+        dk = np.sqrt(np.dot(B,B))
+        #print("x0", x0, "x1", x1)
+        ticks.append(ticks[ibound] + dk)
+        for ik, k in enumerate(cart_coords):
+            dist = dist_point_from_line(k, x0, x1)
+            #print(frac_coords[ik], dist)
+            if dist > dist_tol: continue
+            # k-point is on the cart_bounds
+            A = x0 - k
+            #A = k - x0
+            x = np.dot(A,B)/dk
+            #print("k-x0", A, "B", B)
+            #print(frac_coords[ik], x, x > 0 and x < dist_tol + dk)
+            if dist_tol + dk >= x >= 0:
+                # k-point is within the cart_bounds range
+                # append k-point coordinate along the cart_bounds
+                klines.append(ik)
+                dist_list.append(x + dl)
+
+        dl = dl + dk
+
+    return np.array(klines), np.array(dist_list), np.array(ticks)

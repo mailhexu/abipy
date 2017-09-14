@@ -10,7 +10,7 @@ import abipy.data as abidata
 from pymatgen.core.lattice import Lattice
 from abipy import abilab
 from abipy.core.kpoints import (wrap_to_ws, wrap_to_bz, issamek, Kpoint, KpointList, KpointsReader, has_timrev_from_kptopt,
-    KSamplingInfo, as_kpoints, rc_list, kmesh_from_mpdivs, Ktables, map_bz2ibz, set_atol_kdiff, set_spglib_tols)
+    KSamplingInfo, as_kpoints, rc_list, kmesh_from_mpdivs, Ktables, map_grid2ibz, set_atol_kdiff, set_spglib_tols)
 from abipy.core.testing import AbipyTest
 
 
@@ -165,6 +165,8 @@ class TestKpointList(AbipyTest):
         self.serialize_with_pickle(klist, protocols=[-1])
         self.assertMSONable(klist, test_if_subclass=False)
 
+        self.assert_equal(klist.frac_coords.flatten(), frac_coords)
+        self.assert_equal(klist.get_cart_coords(), np.reshape([k.cart_coords for k in klist], (-1, 3)))
         assert klist.sum_weights() == 1
         assert len(klist) == 3
 
@@ -184,6 +186,14 @@ class TestKpointList(AbipyTest):
         iclose, kclose, dist = klist.find_closest(Kpoint([0.001, 0.002, 0.003], klist.reciprocal_lattice))
         assert iclose == 0
         self.assert_almost_equal(dist, 0.001984943324127921)
+
+        # Compute mapping k_index --> (k + q)_index, g0
+        k2kqg = klist.get_k2kqg_map((0, 0, 0))
+        assert all(ikq == ik for ik, (ikq, g0) in k2kqg.items())
+        k2kqg = klist.get_k2kqg_map((1/2, 1/2, 1/2))
+        assert len(k2kqg) == 2
+        assert k2kqg[0][0] == 1 and np.all(k2kqg[0][1] == 0)
+        assert k2kqg[1][0] == 0 and np.all(k2kqg[1][1] == 1)
 
         frac_coords = [0, 0, 0, 1/2, 1/3, 1/3]
         other_klist = KpointList(lattice, frac_coords)
@@ -483,9 +493,9 @@ class TestKmappingTools(AbipyTest):
             #self.has_timrev = has_timrev_from_kptopt(kptopt)
             self.ngkpt = [18, 18, 18]
 
-    def test_map_bz2ibz(self):
-        """Testing map_bz2ibz."""
-        bz2ibz = map_bz2ibz(self.mgb2, self.kibz, self.ngkpt, self.has_timrev, pbc=False)
+    def test_map_grid2ibz(self):
+        """Testing map_grid2ibz."""
+        bz2ibz = map_grid2ibz(self.mgb2, self.kibz, self.ngkpt, self.has_timrev, pbc=False)
 
         bz = []
         nx, ny, nz = self.ngkpt

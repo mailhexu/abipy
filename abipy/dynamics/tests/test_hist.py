@@ -62,4 +62,8 @@ class HistFileTest(AbipyTest):
         if self.has_nbformat():
             hist.write_notebook(nbpath=self.get_tmpname(text=True))
 
+        if self.has_mayavi():
+            assert hist.mvplot_trajectories(show=False)
+            #assert hist.mvanimate(delay=100)
+
         hist.close()

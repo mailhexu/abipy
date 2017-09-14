@@ -35,7 +35,7 @@ class TestStructure(AbipyTest):
 
             # Export data in Xcrysden format.
             #structure.export(self.get_tmpname(text=True, suffix=".xsf"))
-            #visu = structure.visualize("vesta")
+            #visu = structure.visualize(visu_name="vesta")
             #assert callable(visu)
 
             if self.has_ase():
@@ -77,6 +77,10 @@ class TestStructure(AbipyTest):
         assert si_abi.formula == "Si2"
         self.assert_equal(si_abi.frac_coords, [[0, 0, 0], [0.25, 0.25, 0.25]])
 
+        si_abo = Structure.from_file(abidata.ref_file("refs/si_ebands/run.abo"))
+        assert si_abo == si_abi
+        assert "ntypat" in si_abi.to(fmt="abivars")
+
         znse = Structure.from_file(abidata.ref_file("refs/znse_phonons/ZnSe_hex_qpt_DDB"))
         assert len(znse) == 4
         assert znse.formula == "Zn2 Se2"
@@ -85,6 +89,10 @@ class TestStructure(AbipyTest):
             0.66666666666667,  0.33333333333333, 0.49962203020000,
             0.33333333333333,  0.66666666666667, 0.62537796980000,
             0.66666666666667,  0.33333333333333, 0.12537796980000])
+
+        from abipy.core.structure import diff_structures
+        diff_structures([si_abi, znse], headers=["si_abi", "znse"], fmt="abivars", mode="table")
+        diff_structures([si_abi, znse], headers=["si_abi", "znse"], fmt="abivars", mode="diff")
 
         # From pickle file.
         import pickle
@@ -113,9 +121,13 @@ class TestStructure(AbipyTest):
         assert "equivalent_atoms" in e.spgdata
 
         if self.has_matplotlib():
-            si.show_bz(show=False)
-            si.show_bz(pmg_path=False, show=False)
-            si.plot_xrd(show=False)
+            assert si.plot_bz(show=False)
+            assert si.plot_bz(pmg_path=False, show=False)
+            assert si.plot_xrd(show=False)
+
+        if self.has_mayavi():
+            #assert si.vtkview(show=False)  # Disabled due to (core dumped) on travis
+            assert si.mayaview(show=False)
 
         assert si is Structure.as_structure(si)
         assert si == Structure.as_structure(si.to_abivars())
@@ -135,6 +147,9 @@ class TestStructure(AbipyTest):
         si = Structure.from_material_id("mp-149")
         assert si.formula == "Si2"
 
+        mgb2_cod = Structure.from_cod_id(1526507, primitive=True)
+        assert mgb2_cod.formula == "Mg1 B2"
+
         mgb2 = abidata.structure_from_ucell("MgB2")
         if self.has_ase():
             mgb2.abi_primitive()
@@ -146,8 +161,8 @@ class TestStructure(AbipyTest):
         mgb2.abi_sanitize(primitive_standard=True)
         mgb2.get_conventional_standard_structure()
         assert len(mgb2.abi_string)
-        assert len(mgb2.spglib_summary(verbose=10))
-        #print(structure.__repr_html__())
+        assert len(mgb2.spget_summary(verbose=10))
+        #print(structure._repr_html_())
 
         self.serialize_with_pickle(mgb2)
 
@@ -166,12 +181,33 @@ class TestStructure(AbipyTest):
         #assert len(batom.cart_coords) == 1
         #self.assert_equal(batom.cart_coords[0], [1, 2, 3])
 
-        #bcc_prim = Structure.bcc(10, ["Si"], primitive=True)
-        #bcc_conv = Structure.bcc(10, ["Si"], primitive=False)
-        #fcc_prim = Structure.bcc(10, ["Si"], primitive=True)
-        #fcc_conv = Structure.bcc(10, ["Si"], primitive=False)
-        #rock = Structure.rocksalt(10, ["Na", "Cl"])
-        #perov = Structure.ABO3(10, ["A", "B", "O", "O", "O"])
+        # Function to compute cubic a0 from primitive v0 (depends on struct_type)
+        vol2a = {"fcc": lambda vol: (4 * vol) ** (1/3.),
+                 "bcc": lambda vol: (2 * vol) ** (1/3.),
+                 "rocksalt": lambda vol: (4 * vol) ** (1/3.),
+                 "ABO3": lambda vol: vol ** (1/3.),
+                 "hH": lambda vol: (4 * vol) ** (1/3.),
+                 }
+
+        a = 10
+        bcc_prim = Structure.bcc(a, ["Si"], primitive=True)
+        assert len(bcc_prim) == 1
+        self.assert_almost_equal(a, vol2a["bcc"](bcc_prim.volume))
+        bcc_conv = Structure.bcc(a, ["Si"], primitive=False)
+        assert len(bcc_conv) == 2
+        self.assert_almost_equal(a**3, bcc_conv.volume)
+        fcc_prim = Structure.fcc(a, ["Si"], primitive=True)
+        assert len(fcc_prim) == 1
+        self.assert_almost_equal(a, vol2a["fcc"](fcc_prim.volume))
+        fcc_conv = Structure.fcc(a, ["Si"], primitive=False)
+        assert len(fcc_conv) == 4
+        self.assert_almost_equal(a**3, fcc_conv.volume)
+        rock = Structure.rocksalt(a, ["Na", "Cl"])
+        assert len(rock) == 2
+        self.assert_almost_equal(a, vol2a["rocksalt"](rock.volume))
+        perov = Structure.ABO3(a, ["Ca", "Ti", "O", "O", "O"])
+        assert len(perov) == 5
+        self.assert_almost_equal(a**3, perov.volume)
 
         # Test notebook generation.
         if self.has_nbformat():
@@ -182,6 +218,7 @@ class TestStructure(AbipyTest):
         mgb2 = abidata.structure_from_ucell("MgB2")
         sic = abidata.structure_from_ucell("SiC")
         alas = abidata.structure_from_ucell("AlAs")
+        dfs = frames_from_structures([mgb2, sic, alas], index=None, with_spglib=True, cart_coords=True)
         dfs = frames_from_structures([mgb2, sic, alas], index=None, with_spglib=True, cart_coords=False)
 
         assert dfs.lattice is not None
@@ -233,26 +270,3 @@ class TestStructure(AbipyTest):
         #print(structure.lattice._matrix)
         #for site in structure:
         #    print(structure.lattice.get_cartesian_coords(site.frac_coords))
-
-
-class TestMpRestApi(AbipyTest):
-
-    def test_mprestapi(self):
-        """Testing MP Rest API wrappers."""
-        from abipy import abilab
-        # Test mp_search
-        mp = abilab.mp_search("MgB2")
-        repr(mp); str(mp)
-        assert mp.structures
-        assert "mp-763" in mp.mpids
-        assert len(mp.structures) == len(mp.data)
-        assert hasattr(mp.table, "describe")
-        mp.print_results(fmt="abivars", verbose=2)
-
-        # Test mp_match_structure
-        mp = abilab.mp_match_structure(abidata.cif_file("al.cif"))
-        repr(mp); str(mp)
-        assert mp.structures
-        assert "mp-134" in mp.mpids
-        assert mp.data is None and mp.table is None
-        mp.print_results(fmt="abivars", verbose=2)

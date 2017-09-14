@@ -148,10 +148,13 @@ class ElectronBandsTest(AbipyTest):
         if self.has_matplotlib():
             elims = [-10, 2]
             assert ni_ebands_kmesh.plot(show=False)
-            assert ni_ebands_kmesh.show_bz(show=False)
+            assert ni_ebands_kmesh.plot_bz(show=False)
             assert ni_ebands_kpath.plot(ylims=elims, show=False)
             assert ni_ebands_kpath.plot_with_edos(ni_edos, ylims=elims, show=False)
-            assert ni_ebands_kpath.show_bz()
+            assert ni_ebands_kpath.plot_bz(show=False)
+            assert ni_ebands_kpath.plot_transitions(4.4, qpt=(0, 0, 0), atol_ev=0.1, atol_kdiff=1e-4, show=False)
+            assert ni_ebands_kpath.plot_transitions(4.4, qpt=(0.03, 0, 0), atol_ev=0.5, atol_kdiff=0.2, show=False)
+            assert ni_ebands_kpath.plot_scatter3d(spin=0, band=8, show=False)
             assert ni_edos.plot(xlims=elims, show=False)
             assert ni_edos.plot_dos_idos(xlims=elims, show=False)
             assert ni_edos.plot_up_minus_down(xlims=elims, show=False)
@@ -421,10 +424,27 @@ class ElectronBandsTest(AbipyTest):
 
         self.assert_almost_equal(np.array(values), 1.0)
 
-    def test_to_bxsf(self):
-        """Testing Fermi surface exporter."""
+    def test_fermi_surface(self):
+        """Testing Fermi surface tools."""
         with abilab.abiopen(abidata.ref_file("mgb2_kmesh181818_FATBANDS.nc")) as fbnc_kmesh:
-            fbnc_kmesh.ebands.to_bxsf(self.get_tmpname(text=True))
+            ebands = fbnc_kmesh.ebands
+            str(ebands)
+            ebands.to_bxsf(self.get_tmpname(text=True))
+
+            eb3d = ebands.get_ebands3d()
+            repr(eb3d); str(eb3d)
+
+            #if self.has_matplotlib():
+            #    try
+            #        from skimage import measure
+            #    except:
+            #    assert eb3b.plot_isosurfaces(e0="fermie", verbose=1, show=False)
+            #    assert eb3d.plot_contour(band=4, spin=1, plane="xy", elevation=0, show=False)
+
+            # Test Mayavi
+            if self.has_mayavi():
+                assert eb3d.mvplot_isosurfaces(verbose=1, show=False)
+                #assert eb3d.mvplot_cutplanes(band=4, spin=0, show=False)
 
     def test_frame_from_ebands(self):
         """Testing frame_from_ebands."""
@@ -433,7 +453,7 @@ class ElectronBandsTest(AbipyTest):
         gsr_nscf_path = abidata.ref_file("si_nscf_GSR.nc")
         index = ["foo", "bar", "hello"]
         df = frame_from_ebands([gsr_kmesh, si_ebands_kmesh, gsr_nscf_path], index=index, with_spglib=True)
-        #print(df)
+        str(df)
         assert all(f == "Si2" for f in df["formula"])
         assert all(num == 227 for num in df["abispg_num"])
         assert all(df["spglib_num"] == df["abispg_num"])

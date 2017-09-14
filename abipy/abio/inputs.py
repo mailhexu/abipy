@@ -249,8 +249,10 @@ class AbstractInput(six.with_metaclass(abc.ABCMeta, MutableMapping, object)):
             `namedtuple` with the following attributes:
 
                 retcode: Return code. 0 if OK.
+                output_file: output file of the run.
                 log_file:  log file of the Abinit run, use log_file.read() to access its content.
                 stderr_file: stderr file of the Abinit run. use stderr_file.read() to access its content.
+                task: Task object
         """
 
 
@@ -1377,12 +1379,46 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
             `namedtuple` with the following attributes:
 
                 retcode: Return code. 0 if OK.
+                output_file: output file of the run.
                 log_file:  log file of the Abinit run, use log_file.read() to access its content.
                 stderr_file: stderr file of the Abinit run. use stderr_file.read() to access its content.
+                task: Task object
         """
         task = AbinitTask.temp_shell_task(inp=self, workdir=workdir, manager=manager)
         retcode = task.start_and_wait(autoparal=False, exec_args=["--dry-run"])
-        return dict2namedtuple(retcode=retcode, log_file=task.log_file, stderr_file=task.stderr_file)
+        return dict2namedtuple(retcode=retcode, output_file=task.output_file, log_file=task.log_file,
+                               stderr_file=task.stderr_file, task=task)
+
+    def abiget_spacegroup(self, tolsym=None, workdir=None, manager=None):
+        """
+        This function invokes Abinit to get the space group (as detected by Abinit, not by spglib)
+        It should be called with an input file that contains all the mandatory variables required by ABINIT.
+
+        Args:
+            tolsym: Abinit tolsym input variable. None correspondes to the default value.
+            workdir: Working directory of the fake task used to compute the ibz. Use None for temporary dir.
+            manager: :class:`TaskManager` of the task. If None, the manager is initialized from the config file.
+
+        Return:
+            Structure object with AbinitSpaceGroup obtained from the main output file.
+        """
+        # Avoid modifications in self.
+        inp = self.deepcopy()
+        if tolsym is not None: inp["tolsym"] = float(tolsym)
+        # Bypass Abinit check as we always want to return results.
+        inp["chksymbreak"] = 0
+
+        # Build a Task to run Abinit in --dry-run mode.
+        task = AbinitTask.temp_shell_task(inp, workdir=workdir, manager=manager)
+        task.start_and_wait(autoparal=False, exec_args=["--dry-run"])
+
+        # Parse the output file and return structure extracted from run.abo
+        from abipy.abio.outputs import AbinitOutputFile
+        try:
+            with AbinitOutputFile(task.output_file.path) as out:
+                return out.initial_structure
+        except Exception as exc:
+            self._handle_task_exception(task, exc)
 
     def abiget_ibz(self, ngkpt=None, shiftk=None, kptopt=None, workdir=None, manager=None):
         """
@@ -1406,6 +1442,8 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
 
         # The magic value that makes ABINIT print the ibz and then stop.
         inp["prtkpt"] = -2
+        # Bypass Abinit check as we always want to return results.
+        inp["chksymbreak"] = 0
 
         if ngkpt is not None: inp["ngkpt"] = ngkpt
         if shiftk is not None:
@@ -1500,6 +1538,9 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
         qpt = inp.get("qpt") if qpt is None else qpt
         if qpt is None:
             raise ValueError("qpt is not in the input and therefore it must be passed explicitly")
+
+        # Bypass Abinit check as we always want to return results.
+        inp["chksymbreak"] = 0
 
         if ngkpt is not None: inp["ngkpt"] = ngkpt
         if shiftk is not None:
@@ -1677,6 +1718,9 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
         """
         inp = self.deepcopy()
         inp.set_vars(autoparal=autoparal, max_ncpus=max_ncpus)
+
+        # Bypass Abinit check as we always want to return results.
+        inp["chksymbreak"] = 0
 
         # Run the job in a shell subprocess with mpi_procs = 1
         # Return code is always != 0
@@ -2561,13 +2605,16 @@ class AnaddbInput(AbstractInput, Has_Structure):
             `namedtuple` with the following attributes:
 
                 retcode: Return code. 0 if OK.
+                output_file: output file of the run.
                 log_file:  log file of the Abinit run, use log_file.read() to access its content.
                 stderr_file: stderr file of the Abinit run. use stderr_file.read() to access its content.
+                task: Task object
         """
         task = AnaddbTask.temp_shell_task(self, ddb_node="fake_DDB", workdir=workdir, manager=manager)
         # TODO: Anaddb does not support --dry-run
         #retcode = task.start_and_wait(autoparal=False, exec_args=["--dry-run"])
-        return dict2namedtuple(retcode=0, log_file=task.log_file, stderr_file=task.stderr_file)
+        return dict2namedtuple(retcode=0, output_file=task.output_file, log_file=task.log_file,
+                               stderr_file=task.stderr_file, task=task)
 
 
 class OpticVar(collections.namedtuple("OpticVar", "name default group help")):
@@ -2778,18 +2825,25 @@ class OpticInput(AbstractInput, MSONable):
             `namedtuple` with the following attributes:
 
                 retcode: Return code. 0 if OK.
+                output_file: output file of the run.
                 log_file:  log file of the Abinit run, use log_file.read() to access its content.
                 stderr_file: stderr file of the Abinit run. use stderr_file.read() to access its content.
+                task: Task object
         """
         # TODO: Optic does not support --dry-run
         #task = OpticTask.temp_shell_task(inp=self, workdir=workdir, manager=manager)
         #retcode = task.start_and_wait(autoparal=False, exec_args=["--dry-run"])
-        return dict2namedtuple(retcode=0, log_file=None, stderr_file=None)
+        return dict2namedtuple(retcode=0, output_file=None, log_file=None,
+                               stderr_file=None, task=None)
 
 
 class Cut3DInput(MSONable, object):
     """
     This object stores the options to run a single cut3d analysis.
+
+    .. warning::
+
+        Converters with nspden > 1 won't work since cut3d asks for the ispden index.
     """
     def __init__(self, infile_path=None, output_filepath=None, options=None):
         """

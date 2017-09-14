@@ -76,17 +76,25 @@ def has_matplotlib(version=None, op=">="):
     If version is None, the result of matplotlib.__version__ `op` version is returned.
     """
     try:
-        # have_display = "DISPLAY" in os.environ
         import matplotlib
-        matplotlib.use("Agg")  # Use non-graphical display backend during test.
-
+        import matplotlib.pyplot as plt
+        # have_display = "DISPLAY" in os.environ
     except ImportError:
         print("Skipping matplotlib test")
         return False
 
     # http://stackoverflow.com/questions/21884271/warning-about-too-many-open-figures
-    import matplotlib.pyplot as plt
     plt.close("all")
+    matplotlib.use("Agg")
+    #matplotlib.use("Agg", force=True)  # Use non-graphical display backend during test.
+
+    backend = matplotlib.get_backend()
+    if backend.lower() != "agg":
+        #raise RuntimeError("matplotlib backend now is %s" % backend)
+        #matplotlib.use("Agg", warn=True, force=False)
+        # Switch the default backend.
+        # This feature is experimental, and is only expected to work switching to an image backend.
+        plt.switch_backend("Agg")
 
     if version is None: return True
     return cmp_version(matplotlib.__version__, version, op=op)
@@ -133,26 +141,26 @@ def get_mock_module():
     return mock
 
 
-def has_fireworks():
-    """True if fireworks is installed."""
-    try:
-        import fireworks
-        return True
-    except ImportError:
-        return False
+#def has_fireworks():
+#    """True if fireworks is installed."""
+#    try:
+#        import fireworks
+#        return True
+#    except ImportError:
+#        return False
 
 
-def has_mongodb(host='localhost', port=27017, name='mongodb_test', username=None, password=None):
-    try:
-        from pymongo import MongoClient
-        connection = MongoClient(host, port, j=True)
-        db = connection[name]
-        if username:
-            db.authenticate(username, password)
-
-        return True
-    except:
-        return False
+#def has_mongodb(host='localhost', port=27017, name='mongodb_test', username=None, password=None):
+#    try:
+#        from pymongo import MongoClient
+#        connection = MongoClient(host, port, j=True)
+#        db = connection[name]
+#        if username:
+#            db.authenticate(username, password)
+#
+#        return True
+#    except:
+#        return False
 
 
 def json_read_abinit_input_from_path(json_path):
@@ -170,12 +178,6 @@ def json_read_abinit_input_from_path(json_path):
         pdict["filepath"] = os.path.join(abidata.dirpath, "pseudos", os.path.basename(pdict["filepath"]))
 
     return AbinitInput.from_dict(d)
-
-
-def straceback():
-    """Returns a string with the traceback."""
-    import traceback
-    return traceback.format_exc()
 
 
 def input_equality_check(ref_file, input2, rtol=1e-05, atol=1e-08, equal_nan=False):
@@ -271,6 +273,18 @@ class AbipyTest(PymatgenTest):
 
     SkipTest = unittest.SkipTest
 
+    #def setUp(self):
+    #    import matplotlib
+    #    matplotlib.use("Agg")
+    #    backend = matplotlib.get_backend()
+    #    #if backend.lower() != "agg": raise RuntimeError("matplotlib backend now is %s" % backend)
+
+    #def tearDown(self):
+    #    import matplotlib
+    #    #backend = matplotlib.get_backend()
+    #    #if backend.lower() != "agg": raise RuntimeError("matplotlib backend now is %s" % backend)
+    #    matplotlib.use("Agg")
+
     @staticmethod
     def which(program):
         """Returns full path to a executable. None if not found or not executable."""
@@ -300,9 +314,24 @@ class AbipyTest(PymatgenTest):
         if version is None: return True
         return cmp_version(ase.__version__, version, op=op)
 
-    def assertFwSerializable(self, obj):
-        self.assertTrue('_fw_name' in obj.to_dict())
-        self.assertDictEqual(obj.to_dict(), obj.__class__.from_dict(obj.to_dict()).to_dict())
+    def has_mayavi(self):
+        """
+        True if Mayavi is available. Set also offscreen to True
+        """
+        #return False
+        try:
+            from mayavi import mlab
+        except ImportError:
+            return False
+
+        #mlab.clf()
+        mlab.options.offscreen = True
+        mlab.options.backend = "test"
+        return True
+
+    #def assertFwSerializable(self, obj):
+    #    assert '_fw_name' in obj.to_dict()
+    #    self.assertDictEqual(obj.to_dict(), obj.__class__.from_dict(obj.to_dict()).to_dict())
 
     @staticmethod
     def get_abistructure_from_abiref(basename):
@@ -388,7 +417,8 @@ class AbipyTest(PymatgenTest):
     @staticmethod
     def straceback():
         """Returns a string with the traceback."""
-        return straceback()
+        import traceback
+        return traceback.format_exc()
 
     @staticmethod
     def skip_if_not_phonopy(version=None, op=">="):
@@ -534,39 +564,39 @@ class AbipyFileTest(AbipyTest):
         return self.assertRegexpMatches(last, expression2)
 
 
-CONF_FILE = None
-BKP_FILE = None
+#CONF_FILE = None
+#BKP_FILE = None
 
 
-def change_matplotlib_backend(new_backend=""):
-    """Change the backend by modifying the matplotlib configuration file."""
-    global CONF_FILE, BKP_FILE
+#def change_matplotlib_backend(new_backend=""):
+#    """Change the backend by modifying the matplotlib configuration file."""
+#    global CONF_FILE, BKP_FILE
+#
+#    if not new_backend:
+#        return
+#
+#    home = os.environ["HOME"]
+#    CONF_FILE = conf_file = os.path.join(home, ".matplotlib", "matplotlibrc")
+#
+#    BKP_FILE = conf_file + ".bkp"
+#
+#    if os.path.exists(conf_file):
+#        shutil.copy(conf_file, BKP_FILE)
+#
+#        with open(conf_file, "rt") as f:
+#            lines = f.readlines()
+#
+#        for i, line in enumerate(lines):
+#            if line.strip().startswith("backend"):
+#                lines[i] = "backend : " + new_backend + "\n"
+#
+#        with open(conf_file, "w") as f:
+#            f.writelines(lines)
 
-    if not new_backend:
-        return
 
-    home = os.environ["HOME"]
-    CONF_FILE = conf_file = os.path.join(home, ".matplotlib", "matplotlibrc")
-
-    BKP_FILE = conf_file + ".bkp"
-
-    if os.path.exists(conf_file):
-        shutil.copy(conf_file, BKP_FILE)
-
-        with open(conf_file, "rt") as f:
-            lines = f.readlines()
-
-        for i, line in enumerate(lines):
-            if line.strip().startswith("backend"):
-                lines[i] = "backend : " + new_backend + "\n"
-
-        with open(conf_file, "w") as f:
-            f.writelines(lines)
-
-
-def revert_matplotlib_backend():
-    """Revert matplotlib backend to the previous value."""
-    global CONF_FILE, BKP_FILE
-    # print("reverting: BKP_FILE %s --> CONF %s" % (BKP_FILE, CONF_FILE))
-    if BKP_FILE is not None:
-        shutil.move(BKP_FILE, CONF_FILE)
+#def revert_matplotlib_backend():
+#    """Revert matplotlib backend to the previous value."""
+#    global CONF_FILE, BKP_FILE
+#    # print("reverting: BKP_FILE %s --> CONF %s" % (BKP_FILE, CONF_FILE))
+#    if BKP_FILE is not None:
+#        shutil.move(BKP_FILE, CONF_FILE)

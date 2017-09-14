@@ -25,6 +25,8 @@ __all__ = [
     "Has_ElectronBands",
     "Has_PhononBands",
     "NotebookWriter",
+    #"Has_Header",
+    #"AbinitHeader",
 ]
 
 @six.add_metaclass(abc.ABCMeta)
@@ -208,11 +210,14 @@ class Has_Structure(object):
     def structure(self):
         """Returns the :class:`Structure` object."""
 
-    def show_bz(self, **kwargs):
+    def plot_bz(self, **kwargs):
         """
         Gives the plot (as a matplotlib object) of the symmetry line path in the Brillouin Zone.
         """
-        return self.structure.show_bz(**kwargs)
+        return self.structure.plot_bz(**kwargs)
+
+    # To maintain backward compatbility
+    show_bz = plot_bz
 
     def export_structure(self, filepath):
         """
@@ -373,9 +378,6 @@ class NotebookWriter(object):
     """
     Mixin class for objects that are able to generate jupyter notebooks.
     Subclasses must provide a concrete implementation of `write_notebook`.
-
-    See also:
-        http://nbviewer.jupyter.org/github/maxalbert/auto-exec-notebook/blob/master/how-to-programmatically-generate-and-execute-an-ipython-notebook.ipynb
     """
     def make_and_open_notebook(self, nbpath=None, foreground=False):
         """
@@ -398,20 +400,15 @@ class NotebookWriter(object):
             raise RuntimeError("Cannot find jupyter in PATH. Install it with `conda install jupyter or `pip install jupyter`")
 
         if foreground:
-            cmd = "jupyter notebook %s" % nbpath
-            return os.system(cmd)
+            return os.system("jupyter notebook %s" % nbpath)
         else:
-            cmd = "jupyter notebook %s &> /dev/null &" % nbpath
-            print("Executing:", cmd)
-            import subprocess
+            fd, tmpname = tempfile.mkstemp(text=True)
+            print(tmpname)
             cmd = "jupyter notebook %s" % nbpath
-
-            try:
-                from subprocess import DEVNULL # py3k
-            except ImportError:
-                DEVNULL = open(os.devnull, "wb")
-
-            process = subprocess.Popen(cmd.split(), shell=False, stdout=DEVNULL, stderr=DEVNULL)
+            print("Executing:", cmd)
+            print("stdout and stderr redirected to %s" % tmpname)
+            import subprocess
+            process = subprocess.Popen(cmd.split(), shell=False, stdout=fd, stderr=fd)
             cprint("pid: %s" % str(process.pid), "yellow")
 
     def get_nbformat_nbv_nb(self, title=None):
@@ -428,13 +425,21 @@ class NotebookWriter(object):
             nbv.new_code_cell("""\
 from __future__ import print_function, division, unicode_literals, absolute_import
 
-import sys
-import os
+import sys, os
 import numpy as np
 
 %matplotlib notebook
 from IPython.display import display
-#import seaborn as sns   # uncomment this line to activate seaborn settings.
+
+# Uncomment this line to activate seaborn settings.
+#import seaborn as sns
+
+# This to render pandas DataFrames with https://github.com/quantopian/qgrid
+#import qgrid
+#qgrid.nbinstall(overwrite=True)  # copies javascript dependencies to your /nbextensions folder
+
+# This to view Mayavi visualizations. See http://docs.enthought.com/mayavi/mayavi/tips.html
+#from mayavi import mlab; mlab.init_notebook(backend='x3d', width=None, height=None, local=True)
 
 from abipy import abilab""")
         ])
@@ -501,3 +506,8 @@ from abipy import abilab""")
         with open(filepath, "wb") as fh:
             pickle.dump(self, fh)
             return filepath
+
+#class Has_AbinitHeader(object)
+#    @lazy_property
+#    def hdr(self)
+#        return self.reader.read_hdr()

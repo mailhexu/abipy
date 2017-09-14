@@ -18,7 +18,6 @@ from monty.functools import lazy_property
 from monty.termcolor import cprint
 from monty.dev import deprecated
 from pymatgen.core.units import eV_to_Ha, Energy
-from pymatgen.phonon.bandstructure import PhononBandStructureSymmLine
 from abipy.core.func1d import Function1D
 from abipy.core.mixins import AbinitNcFile, Has_Structure, Has_PhononBands, NotebookWriter
 from abipy.core.kpoints import Kpoint, KpointList
@@ -111,7 +110,7 @@ class PhononMode(object):
     def __str__(self):
         return self.to_string(with_displ=False)
 
-    def to_string(self, with_displ=True):
+    def to_string(self, with_displ=True, verbose=0):
         """
         String representation
 
@@ -257,24 +256,24 @@ class PhononBands(object):
     def __str__(self):
         return self.to_string()
 
-    def to_string(self, title=None, with_structure=True, with_qpoints=False, verbose=0):
+    def to_string(self, title=None, with_structure=True, with_qpoints=False, func=str, verbose=0):
         """
-        Human-readable string with useful info such as band gaps, position of HOMO, LOMO...
+        Human-readable string with useful information such as structure, q-points, ...
 
         Args:
             with_structure: False if structural info shoud not be displayed.
             with_qpoints: False if q-point info shoud not be displayed.
             verbose: Verbosity level.
         """
-        tos = str if verbose else repr
         lines = []; app = lines.append
-        if title is not None:
-            app(marquee(title, mark="="))
+        if title is not None: app(marquee(title, mark="="))
 
         if with_structure:
-            app(tos(self.structure))
+            app(marquee("Structure", mark="="))
+            app(func(self.structure))
             app("")
 
+        app(marquee("Phonon Bands", mark="="))
         app("Number of q-points: %d" % self.num_qpoints)
         app("Atomic mass units: %s" % str(self.amu))
         has_dipdip = self.non_anal_ph is not None
@@ -284,13 +283,13 @@ class PhononBands(object):
 
         if with_qpoints:
             app(marquee("Q-points", mark="="))
-            app(tos(self.qpoints))
+            app(func(self.qpoints))
             app("")
 
         return "\n".join(lines)
 
     def __add__(self, other):
-        """self + other returns an PhononBandsPlotter."""
+        """self + other returns a :class:`PhononBandsPlotter`."""
         if not isinstance(other, (PhononBands, PhononBandsPlotter)):
             raise TypeError("Cannot add %s to %s" % (type(self), type(other)))
 
@@ -324,13 +323,22 @@ class PhononBands(object):
     @lazy_property
     def _auto_qlabels(self):
         # Find the q-point names in the pymatgen database.
-        # We'll use _auto_klabels to label the point in the matplotlib plot
+        # We'll use _auto_qlabels to label the point in the matplotlib plot
         # if qlabels are not specified by the user.
         _auto_qlabels = OrderedDict()
         for idx, qpoint in enumerate(self.qpoints):
             name = self.structure.findname_in_hsym_stars(qpoint)
             if name is not None:
                 _auto_qlabels[idx] = name
+                if qpoint.name is None: qpoint.set_name(name)
+
+        # If the first or the last q-point are not recognized in findname_in_hsym_stars
+        # matplotlib won't show the full band structure along the k-path
+        # because the labels are not defined. Here we make sure that
+        # the labels for the extrema of the path are always defined.
+        if 0 not in _auto_qlabels: _auto_qlabels[0] = " "
+        last = len(self.qpoints) - 1
+        if last not in _auto_qlabels: _auto_qlabels[last] = " "
 
         return _auto_qlabels
 
@@ -472,6 +480,18 @@ class PhononBands(object):
             w('&')
 
         f.close()
+
+    #def to_bxsf(self, filepath):
+    #    """
+    #    Export the full band structure to `filepath` in BXSF format
+    #    suitable for the visualization of isosurfaces with Xcrysden (xcrysden --bxsf FILE).
+    #    Require q-points in IBZ and gamma-centered q-mesh.
+    #    """
+    #    self.get_phbands3d().to_bxsf(filepath)
+
+    #def get_phbands3d(self):
+    #    has_timrev, fermie = True, 0.0
+    #    return PhononBands3D(self.structure, self.qpoints, has_timrev, self.phfreqs, fermie)
 
     def qindex(self, qpoint):
         """
@@ -672,10 +692,45 @@ class PhononBands(object):
         with open(filename, 'wt') as f:
             f.write("\n".join(lines))
 
-    def create_phononwebsite_json(self, filename, name=None, repetitions=None, highsym_qpts=None, match_bands=True,
-                                  highsym_qpts_mode="split"):
+    def view_phononwebsite(self, open_browser=True, verbose=1, **kwargs):
         """
-        Writes a json file that can be parsed from phononwebsite https://github.com/henriquemiranda/phononwebsite
+        Produce json file that can be parsed from the phononwebsite. Contact the server, get
+        the url of the webpage and open it in the browser if `open_browser`.
+
+        Return:
+            Exit status
+        """
+        filename = kwargs.pop("filename", None)
+        if filename is None:
+            import tempfile
+            prefix = self.structure.formula.replace(" ", "")
+            _, filename = tempfile.mkstemp(text=True, prefix=prefix, suffix=".json")
+
+        if verbose: print("Writing json file", filename)
+        self.create_phononwebsite_json(filename, indent=None, **kwargs)
+        url = "http://henriquemiranda.github.io/phononwebsite/phonon.html"
+        import requests
+        with open(filename, 'rt') as f:
+            files = {'file-input': (filename, f)}
+            r = requests.post(url, files=files)
+            # @Henrique: the response should contain the url of the bandstructure plot
+            # so that I can open it in the browser.
+            if verbose:
+                print(r)
+                print(r.text)
+
+        print("Phonon band structure available at:", phbst_url)
+        if open_browser:
+           import webbrowser
+           return int(webbrowser.open(phbst_url))
+        return 0
+
+    def create_phononwebsite_json(self, filename, name=None, repetitions=None, highsym_qpts=None, match_bands=True,
+                                  highsym_qpts_mode="split", indent=2):
+        """
+        Writes a json file that can be parsed from the phononwebsite. See:
+
+                https://github.com/henriquemiranda/phononwebsite
 
         Args:
             filename: name of the json file that will be created
@@ -690,12 +745,13 @@ class PhononBands(object):
                         Similar to the what is done in phononwebsite. Only Gamma will be labeled.
                     'std' uses the standard generation procedure for points and labels used in PhononBands.
                     None does not set any point.
+            indent: Indentation level, passed to json.dump
         """
 
         def split_non_collinear(qpts):
             r"""
             function that splits the list of qpoints at repetitions (only the first point will be considered as
-            high symm) and where the direction changes. Also sets $\Gamma$ for [0,0,0].
+            high symm) and where the direction changes. Also sets $\Gamma$ for [0, 0, 0].
             Similar to what is done in phononwebsite.
             """
             h = []
@@ -725,7 +781,7 @@ class PhononBands(object):
         data["chemical_symbols"] = self.structure.symbol_set
         data["atomic_numbers"] = list(set(self.structure.atomic_numbers))
         data["formula"] = self.structure.formula.replace(" ", "")
-        data["repetitions"] = repetitions or (3,3,3)
+        data["repetitions"] = repetitions or (3, 3, 3)
         data["atom_pos_car"] = self.structure.cart_coords.tolist()
         data["atom_pos_red"] = self.structure.frac_coords.tolist()
 
@@ -744,7 +800,7 @@ class PhononBands(object):
             data["highsym_qpts"] = highsym_qpts
 
         distances = [0]
-        for i in range(1,len(qpoints)):
+        for i in range(1, len(qpoints)):
             q_coord_1 = self.structure.reciprocal_lattice.get_cartesian_coords(qpoints[i])
             q_coord_2 = self.structure.reciprocal_lattice.get_cartesian_coords(qpoints[i-1])
             distances.append(distances[-1] + np.linalg.norm(q_coord_1-q_coord_2))
@@ -785,7 +841,7 @@ class PhononBands(object):
         data["vectors"] = vectors
 
         with open(filename, 'wt') as json_file:
-            json.dump(data, json_file, indent=2)
+            json.dump(data, json_file, indent=indent)
 
     def decorate_ax(self, ax, units='eV', **kwargs):
         title = kwargs.pop("title", None)
@@ -1414,6 +1470,7 @@ class PhononBands(object):
         qpts = np.array(qpts)
         displ = np.transpose(displ, (1, 0, 2, 3))
 
+        from pymatgen.phonon.bandstructure import PhononBandStructureSymmLine
         return PhononBandStructureSymmLine(qpoints=qpts, frequencies=ph_freqs,
                                            lattice=self.structure.reciprocal_lattice,
                                            has_nac=self.non_anal_ph is not None, eigendisplacements=displ,
@@ -1461,6 +1518,26 @@ class PhbstFile(AbinitNcFile, Has_Structure, Has_PhononBands, NotebookWriter):
 
         # Initialize Phonon bands
         self._phbands = PhononBands.from_file(filepath)
+
+    def __str__(self):
+        return self.to_string()
+
+    def to_string(self, verbose=0):
+        """
+        String representation
+
+        Args:
+            verbose: verbosity level.
+        """
+        lines = []; app = lines.append
+
+        app(marquee("File Info", mark="="))
+        app(self.filestat(as_string=True))
+        app("")
+
+        app(self.phbands.to_string(title=None, with_structure=True, with_qpoints=False, verbose=verbose))
+
+        return "\n".join(lines)
 
     @property
     def structure(self):
@@ -1936,6 +2013,28 @@ class PhdosFile(AbinitNcFile, Has_Structure, NotebookWriter):
     def close(self):
         """Close the file."""
         self.reader.close()
+
+    def __str__(self):
+        """Invoked by str"""
+        return self.to_string(func=str)
+
+    def to_string(self, func=str, verbose=0):
+        """
+        Human-readable string with useful information such as structure...
+
+            verbose: Verbosity level.
+        """
+        lines = []; app = lines.append
+
+        app(marquee("File Info", mark="="))
+        app(self.filestat(as_string=True))
+        app("")
+
+        app(marquee("Structure", mark="="))
+        app(func(self.structure))
+        app("")
+
+        return "\n".join(lines)
 
     @lazy_property
     def structure(self):
@@ -2599,7 +2698,7 @@ class PhononBandsPlotter(NotebookWriter):
 
         return fig
 
-    def animate(self, interval=250, savefile=None, units="eV", width_ratios=(2, 1), show=True):
+    def animate(self, interval=500, savefile=None, units="eV", width_ratios=(2, 1), show=True):
         """
         Use matplotlib to animate a list of band structure plots (with or without DOS).
 
@@ -2626,6 +2725,7 @@ class PhononBandsPlotter(NotebookWriter):
         phbands_list, phdos_list = self.phbands_list, self.phdoses_list
         if phdos_list and len(phdos_list) != len(phbands_list):
             raise ValueError("The number of objects for DOS must be equal to the number of bands")
+        #titles = list(self.phbands_dict.keys())
 
         import matplotlib.pyplot as plt
         fig = plt.figure()

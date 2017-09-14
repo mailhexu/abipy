@@ -104,15 +104,20 @@ def find_package_data():
     # This is not enough for these things to appear in an sdist.
     # We need to muck with the MANIFEST to get this to work
     package_data = {
-        'abipy.data': ["cifs/*.cif", "pseudos/*", "runs/*", "refs/*.nc", "variables/*"],
+        'abipy.data': ["cifs/*.cif", "pseudos/*", "hgh_pseudos/*", "runs/*", "refs/*.nc", "variables/*"],
         'abipy.data.refs' : [
             "al_g0w0_spfunc/*",
+            "alas_nl_dfpt/*",
             "alas_phonons/*",
             "mgb2_fatbands/*",
+            "ni_ebands/*",
             "si_bse/*",
+            "si_bse_kpoints/*",
             "si_ebands/*",
             "si_g0w0/*",
-            ],
+            "sio2_screening/*",
+            "znse_phonons/*",
+        ],
         'abipy.htc': ["*.json"],
         'abipy.gui.awx' : ['images/*'],
         'abipy.lessons': ["*.man"],

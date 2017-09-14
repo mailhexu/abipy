@@ -29,7 +29,8 @@ from abipy.flowtk import Pseudo, PseudoTable, Mrgscr, Mrgddb, Mrggkk, Flow, Task
 
 from abipy.core.release import __version__, min_abinit_version
 from abipy.core import restapi
-from abipy.core.structure import Lattice, Structure, StructureModifier, frames_from_structures, mp_match_structure, mp_search
+from abipy.core.structure import (Lattice, Structure, StructureModifier, frames_from_structures,
+  mp_match_structure, mp_search, cod_search)
 from abipy.core.mixins import CubeFile
 from abipy.core.kpoints import set_atol_kdiff
 from abipy.htc.input import AbiInput, LdauParams, LexxParams, input_gen
@@ -43,13 +44,15 @@ from abipy.electrons.ebands import (ElectronBands, ElectronBandsPlotter, Electro
     frame_from_ebands)
 from abipy.electrons.gsr import GsrFile
 from abipy.electrons.psps import PspsFile
+#from abipy.electrons.ddk import DdkNcFile
 from abipy.electrons.gw import SigresFile, SigresPlotter
 from abipy.electrons.bse import MdfFile
 from abipy.electrons.scissors import ScissorsBuilder
 from abipy.electrons.scr import ScrFile
-
-from abipy.electrons.denpot import DensityNcFile, VhartreeNcFile, VxcNcFile, VhxcNcFile, PotNcFile, DensityFortranFile
+from abipy.electrons.denpot import (DensityNcFile, VhartreeNcFile, VxcNcFile, VhxcNcFile, PotNcFile, DensityFortranFile,
+    Cut3dDenPotNcFile)
 from abipy.electrons.fatbands import FatBandsFile
+from abipy.electrons.fold2bloch import Fold2BlochNcfile
 from abipy.dfpt.phonons import (PhbstFile, PhononBands, PhononBandsPlotter, PhdosFile, PhononDosPlotter,
     PhdosReader, phbands_gridplot)
 from abipy.dfpt.ddb import DdbFile
@@ -84,7 +87,7 @@ ext2file = collections.OrderedDict([
     (".psp8", Pseudo),
     (".pspnc", Pseudo),
     (".fhi", Pseudo),
-    (".xml", Pseudo),
+    ("JTH.xml", Pseudo),
 ])
 
 # Abinit files require a special treatment.
@@ -92,6 +95,7 @@ abiext2ncfile = collections.OrderedDict([
     ("GSR.nc", GsrFile),
     ("DEN.nc", DensityNcFile),
     ("OUT.nc", OutNcFile),
+    #("DDK.nc", DdkNcFile),
     ("VHA.nc", VhartreeNcFile),
     ("VXC.nc", VxcNcFile),
     ("VHXC.nc", VhxcNcFile),
@@ -108,6 +112,8 @@ abiext2ncfile = collections.OrderedDict([
     ("GRUNS.nc", GrunsNcFile),
     ("MDF.nc", MdfFile),
     ("FATBANDS.nc", FatBandsFile),
+    ("FOLD2BLOCH.nc", Fold2BlochNcfile),
+    ("CUT3DDENPOT.nc", Cut3dDenPotNcFile),
 ])
 
 

@@ -258,10 +258,31 @@ class TestAbinitInput(AbipyTest):
         inp_si.set_vars(ecut=2, toldfe=1e-6)
         self.abivalidate_input(inp_si)
 
+        # TODO: Here spglib and abinit do not agree.
+        # Test abiget_spacegroup
+        #structure_with_abispg = inp_gan.abiget_spacegroup()
+        #assert structure_with_abispg.abispg is not None
+        #assert structure_with_abispg.abispg.spgid == 227
+
+        # Test abiget_spacegroup for Si
+        structure_with_abispg = inp_si.abiget_spacegroup()
+        assert structure_with_abispg.abi_spacegroup is not None
+        assert structure_with_abispg.abi_spacegroup.spgid == 227
+
         # Test abiget_ibz
         ibz = inp_si.abiget_ibz()
-        assert np.all(ibz.points == [[ 0. ,  0. ,  0. ], [ 0.5,  0. ,  0. ], [ 0.5,  0.5,  0. ]])
+        assert np.all(ibz.points == [[ 0.,  0.,  0.], [0.5,  0.,  0.], [0.5, 0.5, 0.]])
         assert np.all(ibz.weights == [0.125,  0.5,  0.375])
+
+        # This to test what happes with wrong inputs and Abinit errors.
+        wrong = inp_si.deepcopy()
+        removed = wrong.pop_vars("ecut")
+        assert "ecut" not in wrong
+        assert "ecut" in removed
+        assert removed["ecut"] == 2
+        with self.assertRaises(wrong.Error):
+            #wrong["ecut"] = -12.0
+            wrong.abiget_ibz(ngkpt=[-1, -1, -1])
 
         # Test abiget_irred_phperts
         # [{'idir': 1, 'ipert': 1, 'qpt': [0.0, 0.0, 0.0]}]

@@ -12,7 +12,10 @@ from monty.functools import lazy_property
 from monty.collections import dict2namedtuple
 from monty.string import marquee
 from pymatgen import SETTINGS
-from pymatgen.matproj.rest import MPRester, MPRestError
+try:
+    from pymatgen.ext.matproj import MPRester, MPRestError
+except ImportError:
+    from pymatgen.matproj.rest import MPRester, MPRestError
 from abipy.tools.pandas import print_frame
 
 
@@ -53,21 +56,19 @@ class MyMPRester(MPRester):
 
     def get_phasediagram_results(self, elements):
         """
+        Contact the materials project database, fetch entries and build `PhaseDiagramResults` instance.
+
+        Args:
+            elements: List of chemical elements.
         """
-        #from abipy.core.structure import Structure
-        #if duck.is_string(obj)
-        #    structure = Structure.from_file(obj)
-        #if os.path.exists(options.file_or_elements):
-        #    structure = abilab.Structure.from_file(options.file_or_elements)
-        #    elements = structure.symbol_set
-        #else:
-        #    elements = options.file_or_elements
         entries = self.get_entries_in_chemsys(elements, inc_structure="final")
         return PhaseDiagramResults(entries)
 
 
 class PhaseDiagramResults(object):
     """
+    Simplified interface to phase-diagram pymatgen API.
+
     Inspired to:
 
         https://anaconda.org/matsci/plotting-and-analyzing-a-phase-diagram-using-the-materials-api/notebook
@@ -85,14 +86,26 @@ class PhaseDiagramResults(object):
         from pymatgen.phasediagram.maker import PhaseDiagram
         self.phasediagram = PhaseDiagram(self.entries)
 
-    def plot(self, show_unstable=True):
-        # Show all phases, including unstable ones
+    def plot(self, show_unstable=True, show=True):
+        """
+        Plot phase diagram.
+
+        Args:
+            show_unstable: Show all phases, including unstable ones
+            show: True to show plot.
+
+        Return:
+            plotter object.
+        """
         from pymatgen.phasediagram.plotter import PDPlotter
         plotter = PDPlotter(self.phasediagram, show_unstable=show_unstable)
-        plotter.show()
+        if show:
+            plotter.show()
+        return plotter
 
     @lazy_property
     def table(self):
+        """Pandas dataframe with the most important results."""
         from pymatgen.phasediagram.analyzer import PDAnalyzer
         pda = PDAnalyzer(self.phasediagram)
         rows = []
@@ -112,6 +125,14 @@ class PhaseDiagramResults(object):
         return pd.DataFrame(rows, columns=list(rows[0].keys()) if rows else None)
 
     def print_dataframes(self, with_spglib=False, file=sys.stdout, verbose=0):
+        """
+        Print pandas dataframe to file `file`.
+
+        Args:
+            with_spglib: True to compute spacegroup with spglib.
+            file: Output stream.
+            verbose: Verbosity level.
+        """
         print_frame(self.table, file=file)
         if verbose:
             from abipy.core.structure import frames_from_structures
@@ -121,25 +142,65 @@ class PhaseDiagramResults(object):
                 print_frame(dfs.coords, title="Atomic positions (columns give the site index):", file=file)
 
 
-class MpStructures(object):
+class DatabaseStructures(object):
     """Store the results of a query to the MP database."""
 
-    def __init__(self, structures, mpids, data=None):
+    def __init__(self, structures, ids, data=None):
         """
         Args:
             structures: List of structure objects
-            mpids: List of MaterialsProject ids.
+            ids: List of database ids.
             data: List of dictionaries with data associated to the structures (optional).
 	"""
-        self.structures, self.mpids = structures, mpids
-        self.data = data
+        from abipy.core.structure import Structure
+        self.structures = list(map(Structure.as_structure, structures))
+        self.ids, self.data = ids, data
+
+    def __bool__(self):
+        """bool(self)"""
+        return bool(self.structures)
+    __nonzero__ = __bool__  # py2
+
+    def filter_by_spgnum(self, spgnum):
+         """Filter structures by space group number. Return new MpStructures object."""
+         inds = [i for i, s in enumerate(self.structures) if s.get_space_group_info()[1] == int(spgnum)]
+         new_data = None if self.data is None else [self.data[i] for i in inds]
+         return self.__class__([self.structures[i] for i in inds], [self.ids[i] for i in inds], data=new_data)
 
     @lazy_property
     def table(self):
         """Pandas dataframe constructed from self.data. None if data is not available."""
-        if self.data is None: return None
+        return None
+
+    def print_results(self, fmt="abivars", verbose=0, file=sys.stdout):
+        """
+        Print pandas dataframe, structures using format `fmt`, and data to file `file`.
+        """
+        print("\n# Found %s structures in %s database (use `verbose` to get further info)\n"
+                % (len(self.structures), self.dbname), file=file)
+
+        if self.table is not None: print_frame(self.table, file=file)
+        if verbose and self.data is not None: pprint(self.data, stream=file)
+
+        for i, structure in enumerate(self.structures):
+            print(" ", file=file)
+            print(marquee("%s input for %s" % (fmt, self.ids[i]), mark="#"), file=file)
+            #print("\n# " + str(structure).replace("\n", "\n# ") + "\n", file=file)
+            print("# " + structure.spget_summary(verbose=verbose).replace("\n", "\n# ") + "\n", file=file)
+            print(structure.convert(fmt=fmt), file=file)
+            print(2 * "\n", file=file)
+
+
+class MpStructures(DatabaseStructures):
+    """Store the results of a query to the Materials Project database."""
+    dbname = "Materials Project"
+
+    @lazy_property
+    def table(self):
+        """Pandas dataframe constructed from self.data. None if data is not available."""
+        if not self.data: return None
         import pandas as pd
-        rows = []
+        rows, table = [], None
         for d in self.data:
             d = Dotdict(d)
             rows.append(OrderedDict([(k, d.dotget(k, default=None)) for k in MP_KEYS_FOR_DATAFRAME]))
@@ -148,23 +209,12 @@ class MpStructures(object):
 
         return table
 
-    def print_results(self, fmt="abivars", verbose=0, file=sys.stdout):
-        """
-        Print pandas dataframe, structures using format `fmt, and data to file `file`.
-        """
-        print("\n# Found %s structures in materials project database (use `verbose` to get full info)"
-                % len(self.structures), file=file)
 
-        if self.table is not None: print_frame(self.table, file=file)
-        if verbose and self.data is not None: pprint(self.data, stream=file)
-
-        for i, structure in enumerate(self.structures):
-            print(2 * "\n", file=file)
-            print(marquee(" %s input for %s" % (fmt, self.mpids[i]), mark="#"), file=file)
-            print("\n# " + str(structure).replace("\n", "\n# ") + "\n", file=file)
-            print(structure.convert(fmt=fmt), file=file)
-            print(" ", file=file)
-
+class CodStructures(DatabaseStructures):
+    """
+    Store the results of a query to the COD database http://www.crystallography.net/cod/
+    """
+    dbname = "COD"
 
 
 class Dotdict(dict):

@@ -55,20 +55,15 @@ from abipy import abilab\
         raise RuntimeError("Cannot find jupyter in PATH. Install it with `pip install`")
 
     if options.foreground:
-        cmd = "jupyter notebook %s" % nbpath
-        return os.system(cmd)
-
+        return os.system("jupyter notebook %s" % nbpath)
     else:
-        cmd = "jupyter notebook %s &> /dev/null &" % nbpath
+        fd, tmpname = tempfile.mkstemp(text=True)
+        print(tmpname)
+        cmd = "jupyter notebook %s" % nbpath
         print("Executing:", cmd)
-
+        print("stdout and stderr redirected to %s" % tmpname)
         import subprocess
-        try:
-            from subprocess import DEVNULL # py3k
-        except ImportError:
-            DEVNULL = open(os.devnull, "wb")
-
-        process = subprocess.Popen(cmd.split(), shell=False, stdout=DEVNULL) #, stderr=DEVNULL)
+        process = subprocess.Popen(cmd.split(), shell=False, stdout=fd, stderr=fd)
         cprint("pid: %s" % str(process.pid), "yellow")
 
 
@@ -79,11 +74,12 @@ def main():
         s = """\
 Usage example:
 
-    abiopen.py out_GSR.nc        => Open file in ipython shell.
-    abiopen.py out_DDB -nb       => Generate jupyter notebook.
-    abiopen.py out_HIST.nc -p    => Print info on object to terminal.
+    abiopen.py FILE        => Open file in ipython shell.
+    abiopen.py FILE -nb       => Generate jupyter notebook.
+    abiopen.py FILE -p    => Print info on object to terminal.
 
-Use `-v` to increase verbosity level.
+`FILE` is any file supported by abipy/pymatgen e.g Netcdf files, Abinit input, POSCAR, xsf ...
+Use `-v` to increase verbosity level (can be supplied multiple times e.g -vv).
 
 File extensions supported:
 """
@@ -139,7 +135,6 @@ File extensions supported:
                 print(abifile.to_string(verbose=options.verbose))
             else:
                 print(abifile)
-
             return 0
 
         import IPython

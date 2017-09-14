@@ -246,6 +246,7 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
             nbv.new_code_cell("print(gsr)"),
             nbv.new_code_cell("fig = gsr.ebands.plot()"),
             nbv.new_code_cell("fig = gsr.ebands.kpoints.plot()"),
+            nbv.new_code_cell("# fig = gsr.ebands.plot_transitions(omega_ev=3.0, qpt=(0, 0, 0), atol_ev=0.1)"),
             nbv.new_code_cell("""\
 if gsr.ebands.kpoints.is_ibz:
     fig = gsr.ebands.get_edos().plot()"""),
@@ -309,7 +310,7 @@ class EnergyTerms(AttrDict):
             table.add_row([k, self[k]])
         return table
 
-    def to_string(self, with_doc=True):
+    def to_string(self, verbose=0, with_doc=True):
         """String representation, with documentation if with_doc."""
         lines = [str(self.table)]
         if with_doc:
@@ -338,7 +339,7 @@ class GsrReader(ElectronsReader):
         # Abinit stores 6 unique components of this symmetric 3x3 tensor:
         # Given in order (1,1), (2,2), (3,3), (3,2), (3,1), (2,1).
         c = self.read_value("cartesian_stress_tensor")
-        tensor = np.empty((3,3), dtype=np.float)
+        tensor = np.empty((3, 3), dtype=np.float)
         for i in range(3): tensor[i,i] = c[i]
         for p, (i, j) in enumerate(((2,1), (2,0), (1,0))):
             tensor[i,j] = c[3+p]

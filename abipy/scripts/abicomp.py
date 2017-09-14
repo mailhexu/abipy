@@ -9,6 +9,7 @@ from __future__ import unicode_literals, division, print_function, absolute_impo
 import sys
 import os
 import argparse
+import numpy as np
 
 from pprint import pprint
 from monty.functools import prof_main
@@ -102,7 +103,7 @@ def compare_structures(options):
         for s in grp:
             spg_symbol, international_number = s.get_space_group_info()
             print("\t- {} ({}), vol: {:.2f} A^3, {} ({})".format(
-                  paths[structures.index(s)], s.formula, s.volume, spg_symbol, international_number, ))
+                  paths[structures.index(s)], s.formula, s.volume, spg_symbol, international_number))
         print()
 
     if options.verbose:
@@ -114,21 +115,39 @@ def abicomp_mp_structure(options):
     Compare the crystalline structure(s) read from FILE with the one(s)
     reported in the materials project database.
     """
+    return _compare_with_database(options)
+
+
+def abicomp_cod_structure(options):
+    """
+    Compare the crystalline structure(s) read from FILE with the one(s)
+    given in the COD database (http://www.crystallography.net/cod).
+    """
+    return _compare_with_database(options)
+
+
+def _compare_with_database(options):
     structures = [abilab.Structure.from_file(p) for p in options.paths]
-    mpres = [abilab.mp_search(struct.composition.formula) for struct in structures]
+    dbname = {"mp_structure": "materials project", "cod_structure": "COD"}[options.command]
+    if options.command == "mp_structure":
+        mpres = [abilab.mp_search(struct.composition.formula) for struct in structures]
+    elif options.command == "cod_structure":
+        mpres = [abilab.cod_search(struct.composition.formula) for struct in structures]
+    else:
+        raise NotImplementedError(str(options.command))
 
     retcode = 0
     for this_structure, r in zip(structures, mpres):
         if r.structures:
             print()
-            dfs = abilab.frames_from_structures(r.structures + [this_structure], index=r.mpids + ["this"])
+            dfs = abilab.frames_from_structures(r.structures + [this_structure], index=r.ids + ["this"])
             abilab.print_frame(dfs.lattice, title="Lattice parameters:", sortby="spglib_num")
             if options.verbose:
-                abilab.print_frame(dfs.coords, title="Atomic positions (columns give the site index):", sortby="spglib_num")
+                abilab.print_frame(dfs.coords, title="Atomic positions (columns give the site index):")
             print()
 
         else:
-            print("Couldn't find pymatgen database entries with formula `%s`" % this_structure.composition.formula)
+            print("Couldn't find %s database entries with formula `%s`" % (dbname, this_structure.composition.formula))
             retcode += 1
 
     return retcode
@@ -305,6 +324,7 @@ def abicomp_attr(options):
     """
     files = []
     attr_name = options.paths[0]
+    values = []
     for p in options.paths[1:]:
         with abilab.abiopen(p) as abifile:
             if options.show:
@@ -312,7 +332,29 @@ def abicomp_attr(options):
                 pprint(dir(abifile))
                 return 0
 
-            print(getattr(abifile, attr_name), "   # File: ", p)
+            v = getattr(abifile, attr_name)
+            print(v, "   # File: ", p)
+            if options.plot:
+                try:
+                    values.append(float(v))
+                except TypeError as exc:
+                    print("Cannot plot data. Exception:\n", str(exc))
+
+    if options.plot and len(values) == len(options.paths[1:]):
+        # Plot values.
+        from abipy.tools.plotting import get_ax_fig_plt
+        ax, fig, plt = get_ax_fig_plt()
+        xs = np.arange(len(options.paths[1:]))
+        ax.plot(xs, values)
+        ax.set_ylabel(attr_name)
+        ax.set_xticks(xs)
+        xlabels = options.paths[1:]
+        s = set((os.path.basename(s) for s in xlabels))
+        if len(s) == len(xlabels): xlabels = s
+        ax.set_xticklabels(xlabels) #, rotation='vertical')
+        plt.show()
+
+    return 0
 
 
 ##################
@@ -376,8 +418,7 @@ def dataframe_from_pseudos(pseudos, index=None):
             if hint.pawecutdg: row["pawecutdg_normal"] = hint.pawecutdg
         rows.append(row)
 
-    return pd.DataFrame(rows, index=index,
-                        columns=list(rows[0].keys()) if rows else None)
+    return pd.DataFrame(rows, index=index, columns=list(rows[0].keys()) if rows else None)
 
 
 def abicomp_pseudos(options):
@@ -386,7 +427,7 @@ def abicomp_pseudos(options):
     index = [os.path.basename(p) for p in options.paths]
     if len(index) != len(set(index)): index = [os.path.relpath(p) for p in options.paths]
     df = dataframe_from_pseudos(options.paths, index=index)
-    print(abilab.print_frame(df, sortby="Z_val"))
+    abilab.print_frame(df, sortby="Z_val")
     return 0
 
 
@@ -532,23 +573,54 @@ def main():
         return """\
 Usage example:
 
+############
+# Structures
+############
+
   abicomp.py structure */*/outdata/out_GSR.nc     => Compare structures in multiple files.
                                                      Use `--group` to compare for similarity
   abicomp.py mp_structure FILE(s)                 => Compare structure(s) read from FILE(s) with the one(s)
                                                      given in the materials project database.
+  abicomp.py cod_structure FILE(s)                => Compare structure(s) read from FILE(s) with the one(s)
+                                                     given in the COD database (http://www.crystallography.net/cod).
   abicomp.py xrd *.cif *.GSR.nc                   => Compare X-ray diffraction plots (requires FILES with structure).
+
+###########
+# Electrons
+###########
+
   abicomp.py ebands out1_GSR.nc out2_WFK.nc       => Plot electron bands on a grid (Use `-p` to change plot mode)
   abicomp.py ebands *_GSR.nc -ipy                 => Build plotter object and start ipython console.
   abicomp.py ebands *_GSR.nc -nb                  => Interact with the plotter via the jupyter notebook.
   abicomp.py edos *_WFK.nc -nb                    => Compare electron DOS in the jupyter notebook.
+
+#########
+# Phonons
+#########
+
   abicomp.py phbands *_PHBST.nc -nb               => Compare phonon bands in the jupyter notebook.
   abicomp.py phdos *_PHDOS.nc -nb                 => Compare phonon DOSes in the jupyter notebook.
-  abicomp.py attr energy *_GSR.nc                 => Extract the `energy` attribute from a list of GSR files and print results.
-                                                     Use `--show` to get list of possible names.
-  abicomp.py pseudos PSEUDO_FILES                 => Compare pseudopotential files.
   abicomp.py ddb outdir1 outdir2 out_DDB -nb      => Analyze all DDB files in directories outdir1, outdir2 and out_DDB file.
+
+########
+# GW/BSE
+########
+
   abicomp.py sigres *_SIGRES.nc                   => Compare multiple SIGRES files.
   abicomp.py mdf *_MDF.nc --seaborn               => Compare macroscopic dielectric functions. Use seaborn settings.
+
+###############
+# Miscelleanous
+###############
+
+  abicomp.py attr energy *_GSR.nc                 => Extract the `energy` attribute from a list of GSR files
+                                                     and print results. Use `--show` to get list of possible names.
+  abicomp.py pseudos PSEUDO_FILES                 => Compare pseudopotential files.
+
+############
+# Text files
+############
+
   abicomp.py text run1.abo run2.abo               => Compare 2+ output files in the browser.
   abicomp.py gs_scf run1.abo run2.abo             => Compare the SCF cycles in two output files.
   abicomp.py dfpt2_scf run1.abo run2.abo          => Compare the DFPT SCF cycles in two output files.
@@ -609,7 +681,11 @@ Use `-v` to increase verbosity level (can be supplied multiple times e.g -vv).
     p_struct.add_argument("-a", "--anonymous", default=False, action="store_true",
                           help="Whether to use anonymous mode in StructureMatcher. Default False")
 
+    # Subparser for mp_structure command.
     p_mpstruct = subparsers.add_parser('mp_structure', parents=[copts_parser], help=abicomp_mp_structure.__doc__)
+
+    # Subparser for cod_structure command.
+    p_codstruct = subparsers.add_parser('cod_structure', parents=[copts_parser], help=abicomp_cod_structure.__doc__)
 
     # Subparser for xrd.
     p_xrd = subparsers.add_parser('xrd', parents=[copts_parser], help="Compare X-ray diffraction plots.")
@@ -656,6 +732,7 @@ Use `-v` to increase verbosity level (can be supplied multiple times e.g -vv).
     # Subparser for phdos command.
     p_attr = subparsers.add_parser('attr', parents=[copts_parser], help=abicomp_attr.__doc__)
     #p_attr.add_argument('attr_name', help="Attribute name.")
+    p_attr.add_argument('--plot', default=False, action="store_true", help="Plot data with matplotlib (requires floats).")
     p_attr.add_argument('--show', default=False, action="store_true", help="Print attributes available in file")
 
     # Subparser for robot commands

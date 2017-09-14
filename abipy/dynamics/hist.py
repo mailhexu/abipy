@@ -3,11 +3,11 @@
 from __future__ import print_function, division, unicode_literals, absolute_import
 
 import numpy as np
+import pymatgen.core.units as units
 
 from monty.functools import lazy_property
 from monty.collections import AttrDict
 from monty.string import marquee # is_string, list_strings,
-from pymatgen.core.units import EnergyArray, ArrayWithUnit
 from abipy.tools.plotting import add_fig_kwargs, get_ax_fig_plt
 from abipy.core.structure import Structure
 from abipy.core.mixins import AbinitNcFile, NotebookWriter
@@ -53,6 +53,9 @@ class HistFile(AbinitNcFile, NotebookWriter):
 
         app(marquee("File Info", mark="="))
         app(self.filestat(as_string=True))
+        app("")
+        app(marquee("Initial structure", mark="="))
+        app(str(self.initial_structure))
         app("")
         app(marquee("Final structure", mark="="))
         app("Number of relaxation steps performed: %d" % self.num_steps)
@@ -109,30 +112,6 @@ class HistFile(AbinitNcFile, NotebookWriter):
         """
         from pymatgen.analysis.structure_analyzer import RelaxationAnalyzer
         return RelaxationAnalyzer(self.initial_structure, self.final_structure)
-
-    #def export(self, filename, visu=None):
-    #    """
-    #    Export the crystalline structure to file filename.
-
-    #    Args:
-    #        filename: String specifying the file path and the file format.
-    #            The format is defined by the file extension. filename="prefix.xsf", for example,
-    #            will produce a file in XSF format. An *empty* prefix, e.g. ".xsf" makes the code use a temporary file.
-    #        visu: `Visualizer` subclass. By default, this method returns the first available
-    #            visualizer that supports the given file format. If visu is not None, an
-    #            instance of visu is returned. See :class:`Visualizer` for the list of applications and formats supported.
-
-    #    Returns: Instance of :class:`Visualizer`
-    #    """
-    #    print("Warning: work in progress")
-    #    raise NotImplementedError("typat is missing in HIST --> wrong structures")
-
-    #    if "." not in filename:
-    #        raise ValueError("Cannot detect extension in filename %s: " % filename)
-
-    #    from abipy.iotools.xsf import xsf_write_structure
-    #    with open(filename, "w") as fh:
-    #        xsf_write_structure(fh, self.structures)
 
     @add_fig_kwargs
     def plot(self, axlist=None, **kwargs):
@@ -223,6 +202,77 @@ class HistFile(AbinitNcFile, NotebookWriter):
 
         return fig
 
+    def mvplot_trajectories(self, colormap="hot", sampling=1, figure=None, show=True, with_forces=True, **kwargs):
+        """
+        Call mayavi to plot atomic trajectories and the variation of the unit cell.
+        """
+        from abipy.display import mvtk
+        figure, mlab = mvtk.get_fig_mlab(figure=figure)
+        style = "labels"
+        line_width = 100
+        mvtk.plot_structure(self.initial_structure, style=style, unit_cell_color=(1, 0, 0), figure=figure)
+        mvtk.plot_structure(self.final_structure, style=style, unit_cell_color=(0, 0, 0), figure=figure)
+
+        steps = np.arange(start=0, stop=self.num_steps, step=sampling)
+        xcart_list = self.reader.read_value("xcart") * units.bohr_to_ang
+        for iatom in range(self.reader.natom):
+            x, y, z = xcart_list[::sampling, iatom, :].T
+            #for i in zip(x, y, z): print(i)
+            trajectory = mlab.plot3d(x, y, z, steps, colormap=colormap, tube_radius=None,
+                                    line_width=line_width, figure=figure)
+            mlab.colorbar(trajectory, title='Iteration', orientation='vertical')
+
+        if with_forces:
+            fcart_list = self.reader.read_cart_forces(unit="eV ang^-1")
+            for iatom in range(self.reader.natom):
+                x, y, z = xcart_list[::sampling, iatom, :].T
+                u, v, w = fcart_list[::sampling, iatom, :].T
+                q = mlab.quiver3d(x, y, z, u, v, w, figure=figure, colormap=colormap,
+                                  line_width=line_width, scale_factor=10)
+                #mlab.colorbar(q, title='Forces [eV/Ang]', orientation='vertical')
+
+        if show: mlab.show()
+        return figure
+
+    def mvanimate(self, delay=500):
+        from abipy.display import mvtk
+        figure, mlab = mvtk.get_fig_mlab(figure=None)
+        style = "points"
+        #mvtk.plot_structure(self.initial_structure, style=style, figure=figure)
+        #mvtk.plot_structure(self.final_structure, style=style, figure=figure)
+
+        xcart_list = self.reader.read_value("xcart") * units.bohr_to_ang
+        #t = np.arange(self.num_steps)
+        #line_width = 2
+        #for iatom in range(self.reader.natom):
+        #    x, y, z = xcart_list[:, iatom, :].T
+        #    trajectory = mlab.plot3d(x, y, z, t, colormap=colormap, tube_radius=None, line_width=line_width, figure=figure)
+        #mlab.colorbar(trajectory, title='Iteration', orientation='vertical')
+
+        #x, y, z = xcart_list[0, :, :].T
+        #nodes = mlab.points3d(x, y, z)
+        #nodes.glyph.scale_mode = 'scale_by_vector'
+        #this sets the vectors to be a 3x5000 vector showing some random scalars
+        #nodes.mlab_source.dataset.point_data.vectors = np.tile( np.random.random((5000,)), (3,1))
+        #nodes.mlab_source.dataset.point_data.scalars = np.random.random((5000,))
+
+        @mlab.show
+        @mlab.animate(delay=delay, ui=True)
+        def anim():
+            """Animate."""
+            for it, structure in enumerate(self.structures):
+            #for it in range(self.num_steps):
+                print('Updating scene for iteration:', it)
+                #mlab.clf(figure=figure)
+                mvtk.plot_structure(structure, style=style, figure=figure)
+                #x, y, z = xcart_list[it, :, :].T
+                #nodes.mlab_source.set(x=x, y=y, z=z)
+                #figure.scene.render()
+                mlab.draw(figure=figure)
+                yield
+
+        anim()
+
     def write_notebook(self, nbpath=None):
         """
         Write an ipython notebook to nbpath. If nbpath is None, a temporay file in the current
@@ -287,9 +337,9 @@ class HistReader(ETSF_Reader):
 
     def read_eterms(self, unit="eV"):
         return AttrDict(
-            etotals=EnergyArray(self.read_value("etotal"), "Ha").to(unit),
-            kinetic_terms=EnergyArray(self.read_value("ekin"), "Ha").to(unit),
-            entropies=EnergyArray(self.read_value("entropy"), "Ha").to(unit),
+            etotals=units.EnergyArray(self.read_value("etotal"), "Ha").to(unit),
+            kinetic_terms=units.EnergyArray(self.read_value("ekin"), "Ha").to(unit),
+            entropies=units.EnergyArray(self.read_value("entropy"), "Ha").to(unit),
         )
 
     def read_cart_forces(self, unit="eV ang^-1"):
@@ -297,7 +347,7 @@ class HistReader(ETSF_Reader):
         Read and return a numpy array with the cartesian forces in unit `unit`.
         Shape (num_steps, natom, 3)
         """
-        return ArrayWithUnit(self.read_value("fcart"), "Ha bohr^-1").to(unit)
+        return units.ArrayWithUnit(self.read_value("fcart"), "Ha bohr^-1").to(unit)
 
     def read_reduced_forces(self):
         """

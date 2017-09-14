@@ -32,7 +32,7 @@ def test_if_all_scripts_are_tested():
 
 class ScriptTest(AbipyTest):
     loglevel = "--loglevel=ERROR"
-    verbose = "--verbose"
+    verbose = "-vv"
 
     expect_stderr = True   # else tests fail due to warnings and deprecation messages
 
@@ -96,7 +96,8 @@ class TestAbinp(ScriptTest):
         r = env.run(self.script, "ebands", gan2_cif, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
         r = env.run(self.script, "phonons", gan2_cif, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
         r = env.run(self.script, "g0w0", gan2_cif, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
-        r = env.run(self.script, "anaph", gan2_cif, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+        ddb_path = abidata.ref_file("refs/znse_phonons/ZnSe_hex_qpt_DDB")
+        r = env.run(self.script, "anaph", ddb_path, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
 
 class TestAbiopen(ScriptTest):
@@ -126,7 +127,7 @@ class TestAbistruct(ScriptTest):
         """Testing abistruct abispg"""
         ncfile = abidata.ref_file("tgw1_9o_DS4_SIGRES.nc")
         env = self.get_env()
-        r = env.run(self.script, "abispg", ncfile, self.loglevel, self.verbose,
+        r = env.run(self.script, "abispg", ncfile, "-t 1e-6", self.loglevel, self.verbose,
                     expect_stderr=self.expect_stderr)
 
     def test_convert(self):
@@ -134,7 +135,7 @@ class TestAbistruct(ScriptTest):
         ncfile = abidata.ref_file("tgw1_9o_DS4_SIGRES.nc")
         env = self.get_env()
         for fmt in ["cif", "cssr", "POSCAR", "json", "mson", "abivars"]:
-            r = env.run(self.script, "convert", ncfile, fmt, self.loglevel, self.verbose,
+            r = env.run(self.script, "convert", ncfile, "-f", fmt, self.loglevel, self.verbose,
                         expect_stderr=self.expect_stderr)
 
     def test_supercell(self):
@@ -158,18 +159,25 @@ class TestAbistruct(ScriptTest):
         r = env.run(self.script, "ngkpt", ncfile, "-n 4", self.loglevel, self.verbose,
                     expect_stderr=self.expect_stderr)
 
-    def test_kmesh(self):
-        """Testing abistruct kmesh"""
+    def test_ktables(self):
+        """Testing abistruct ktables"""
         env = self.get_env()
         ncfile = abidata.ref_file("tgw1_9o_DS4_SIGRES.nc")
-        r = env.run(self.script, "kmesh", "--mesh", "2", "2", "2", "--is_shift", "1", "1", "1",
+        r = env.run(self.script, "ktables", "--mesh", "2", "2", "2", "--is_shift", "1", "1", "1",
                     "--no-time-reversal", ncfile, expect_stderr=self.expect_stderr)
+
+        r = env.run(self.script, "abikmesh", "--ngkpt", "2", "2", "2", "--shiftk", "0", "0", "0",
+                    "--kptopt=1", ncfile, expect_stderr=self.expect_stderr)
 
     def test_lgk(self):
         """Testing abistruct lgk"""
         env = self.get_env()
         ncfile = abidata.ref_file("tgw1_9o_DS4_SIGRES.nc")
         r = env.run(self.script, "lgk", "-k", "0", "0", "0", "--no-time-reversal", ncfile,
+                    expect_stderr=self.expect_stderr)
+
+        # Testing abistruct kstar
+        r = env.run(self.script, "kstar", "-k", "0.5", "0.0", "0.0", "--no-time-reversal", abidata.cif_file("si.cif"),
                     expect_stderr=self.expect_stderr)
 
     def test_abisanitize(self):
@@ -198,16 +206,25 @@ class TestAbistruct(ScriptTest):
         r = env.run(self.script, "oxistate", abidata.cif_file("gan2.cif"),
                     self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
-    #def test_mp_match(self):
-    #    """Testing abistruct mp methods."""
-    #    env = self.get_env()
-    #    r = env.run(self.script, "mp_match", abidata.cif_file("gan2.cif"),
-    #                self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+    def test_cod_api(self):
+        """Testing abistruct COD methods."""
+        env = self.get_env()
+        r = env.run(self.script, "cod_id", "1526507", "--primitive",
+                    self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+        r = env.run(self.script, "cod_search", "Si", "--select-spgnum=227", "--primitive",
+                    self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
-    #    env = self.get_env()
-    #    r = env.run(self.script, "mp_search", "LiF", "-f POSCAR",
-    #                self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+    def test_mp_api(self):
+        """Testing abistruct mp methods."""
+        env = self.get_env()
+        r = env.run(self.script, "mp_id", "mp-149",
+                    self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
+        r = env.run(self.script, "mp_match", abidata.cif_file("gan2.cif"),
+                    self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+
+        r = env.run(self.script, "mp_search", "LiF", "-f POSCAR", "--select-spgnum=225",
+                    self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
 
 class TestAbicomp(ScriptTest):
@@ -248,8 +265,9 @@ class TestAbicomp(ScriptTest):
         #r = env.run(self.script, "attr", "energy", args[0], args[1], self.loglevel, self.verbose,
         #            expect_stderr=self.expect_stderr)
 
-        #r = env.run(self.script, "pseudos", args[0], args[1], self.loglevel, self.verbose,
-        #            expect_stderr=self.expect_stderr)
+        paths = [p.filepath for p in abidata.pseudos("14si.pspnc", "B.psp8", "Al.GGA_PBE-JTH.xml")]
+        r = env.run(self.script, "pseudos", paths[0], paths[1], paths[2], self.loglevel, self.verbose,
+                    expect_stderr=self.expect_stderr)
 
         test_dir = os.path.join(os.path.dirname(__file__),  "..", 'test_files')
         args = [
@@ -317,11 +335,15 @@ class TestAbirun(ScriptTest):
         flow.build_and_pickle_dump()
 
         # Test abirun commands requiring a flow (no submission)
-        for command in ["status", "debug", "deps", "inputs", "corrections", "events",
-                        "history", "handlers", "cancel", "tail", "inspect"]:
+        for command in ["status", "debug", "debug_reset", "deps", "inputs", "corrections", "events",
+                        "history", "handlers", "cancel", "tail", "inspect", "structures"]:
             r = env.run(self.script, flowdir, command, self.loglevel, self.verbose, *no_logo_colors,
                         expect_stderr=self.expect_stderr)
             assert r.returncode == 0
+
+        r = env.run(self.script, flowdir, "abivars", "-vn", "ecut,nband", self.loglevel, self.verbose, *no_logo_colors,
+                    expect_stderr=self.expect_stderr)
+        assert r.returncode == 0
 
 
 class TestAbicheck(ScriptTest):
@@ -331,15 +353,13 @@ class TestAbicheck(ScriptTest):
         """Testing abicheck.py"""
         env = self.get_env()
         r = env.run(self.script, self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
-
         #r = env.run(self.script, "--with-flow", self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
+        r = env.run(self.script, "--show-managers", self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
 
 
-def make_scf_nscf_inputs(paral_kgb=1):
+def make_scf_nscf_inputs(paral_kgb=1, usepaw=0):
     """Returns two input files: GS run and NSCF on a high symmetry k-mesh."""
-    pseudos = abidata.pseudos("14si.pspnc")
-    #pseudos = data.pseudos("Si.GGA_PBE-JTH-paw.xml")
-
+    pseudos = data.pseudos("Si.GGA_PBE-JTH-paw.xml") if usepaw else abidata.pseudos("14si.pspnc")
     multi = abilab.MultiDataset(structure=abidata.cif_file("si.cif"), pseudos=pseudos, ndtset=2)
     multi.set_mnemonics(True)
 
@@ -376,3 +396,12 @@ def make_scf_nscf_inputs(paral_kgb=1):
     # Generate two input files for the GS and the NSCF run
     scf_input, nscf_input = multi.split_datasets()
     return scf_input, nscf_input
+
+
+class TestAbiView(ScriptTest):
+    script = os.path.join(script_dir, "abiview.py")
+
+    def test_abiview(self):
+        """Testing abiview.py script"""
+        env = self.get_env()
+        #r = env.run(self.script, "man", "ecut", self.loglevel, self.verbose, expect_stderr=self.expect_stderr)
