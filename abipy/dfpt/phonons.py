@@ -869,6 +869,9 @@ class PhononBands(object):
         if ticks:
             ax.set_xticks(ticks, minor=False)
             ax.set_xticklabels(labels, fontdict=None, minor=False)
+        for t in ticks:
+            ax.grid(False)
+            ax.axvline(t,color='gray',alpha=0.5)
 
     @add_fig_kwargs
     def plot(self, ax=None, units="eV", qlabels=None, branch_range=None, match_bands=False, **kwargs):
@@ -2564,8 +2567,8 @@ class PhononBandsPlotter(NotebookWriter):
             ax1 = fig.add_subplot(111)
             ax_list = [ax1]
 
-        for ax in ax_list:
-            ax.grid(True)
+        #for ax in ax_list:
+        #ax.grid(True)
 
         if ylims is not None:
             for ax in ax_list:
@@ -2863,7 +2866,7 @@ class PhononDosPlotter(NotebookWriter):
         """
         ax, fig, plt = get_ax_fig_plt(ax)
 
-        ax.grid(True)
+        #ax.grid(True)
         set_axlims(ax, xlims, "x")
         set_axlims(ax, ylims, "y")
         ax.set_xlabel('Energy %s' % _unit_tag(units))
@@ -2920,7 +2923,7 @@ class PhononDosPlotter(NotebookWriter):
             ax.set_xlabel('Energy %s' % _unit_tag(units))
             ax.set_ylabel("DOS %s" % _dos_label_from_units(units))
             ax.set_title(label)
-            ax.grid(True)
+            #ax.grid(True)
             set_axlims(ax, xlims, "x")
             set_axlims(ax, ylims, "y")
             if i % ncols != 0:
