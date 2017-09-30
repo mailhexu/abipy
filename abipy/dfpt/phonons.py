@@ -1053,16 +1053,26 @@ class PhononBands(object):
                              for i in range(len(end_points_indices) - 1)]
             split_phfreqs = [np.array(self.phfreqs[end_points_indices[i]:end_points_indices[i + 1] + 1])
                              for i in range(len(end_points_indices) - 1)]
-
             for i, q in enumerate(split_qpoints):
                 if np.array_equal(q[0], (0, 0, 0)):
                     split_phfreqs[i][0, :] = self._get_non_anal_freqs(q[1])
                 if np.array_equal(q[-1], (0, 0, 0)):
                     split_phfreqs[i][-1, :] = self._get_non_anal_freqs(q[-2])
+
         else:
             split_qpoints = [self.qpoints.frac_coords]
-            split_phfreqs = [self.phfreqs]
+            split_phfreqs = np.array(self.phfreqs)
             end_points_indices = [0, self.num_qpoints-1]
+
+            # A dirty workout to remove the band noncontiuity at Gamma
+            #for i, q in enumerate(self.qpoints.frac_coords[:-1]):
+            #    if np.array_equal(q,(0,0,0)):
+            #        split_phfreqs[i,:] =np.array(self.phfreqs)[i+1,:]
+            #if np.array_equal(self.qpoints.frac_coords[-1],(0,0,0)):
+            #    split_phfreqs[-i,:] =np.array(self.phfreqs)[-2,:]
+
+            split_phfreqs=[split_phfreqs]
+   
 
         self._split_qpoints = split_qpoints
         self._split_phfreqs = split_phfreqs
