@@ -1379,10 +1379,17 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
 
         if strain:
             perts_strain = self.abiget_irred_strainperts(kptopt=2)
+            print(perts_strain)
         else:
             perts_strain=[]
 
-        perts=set(perts_bec).union(perts_strain)
+        perts=[]
+        for pert in perts_bec:
+            if pert not in perts:
+                perts.append(pert)
+        for pert in perts_strain:
+            if pert not in perts:
+                perts.append(pert)
 
         # Build list of datasets (one input per perturbation)
         multi = MultiDataset.replicate_input(input=self, ndtset=len(perts))
