@@ -1313,7 +1313,7 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
 
         return multi
 
-    def make_strain_perts_inputs(self, tolerance=None):
+    def make_strain_perts_inputs(self, tolerance=None, displacement=True, kptopt=3):
         if tolerance is None:
             tolerance = {"tolvrs": 1.0e-12}
         if len(tolerance) != 1 or any(k not in _TOLVARS for k in tolerance):
@@ -1327,13 +1327,13 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
         for pert, inp in zip(perts, multi):
             rfdir = 3 * [0]
             rfdir[pert.idir -1] = 1
-            if pert.ipert <= len(self.structure):
+            if pert.ipert <= len(self.structure) and displacement:
                 inp.set_vars(rfphon=1,             # Activate the calculation of the atomic dispacement perturbations
                              rfatpol=[pert.ipert, pert.ipert],
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
@@ -1342,7 +1342,7 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
@@ -1351,7 +1351,7 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
@@ -1366,7 +1366,7 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
         return multi
 
 
-    def make_strain_and_bec_perts_inputs(self, bec=True, strain=True, tolerance=None):
+    def make_strain_and_bec_perts_inputs(self, bec=True, strain=True, tolerance=None, kptopt_gamma=2):
         if tolerance is None:
             tolerance = {"tolvrs": 1.0e-12}
         if len(tolerance) != 1 or any(k not in _TOLVARS for k in tolerance):
@@ -1404,31 +1404,30 @@ class AbinitInput(six.with_metaclass(abc.ABCMeta, AbstractInput, MSONable, Has_S
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt_gamma,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
             elif pert.ipert == len(self.structure) + 3:
                 inp.set_vars(rfstrs=1,             # Activate the calculation of the strain perturbations (uniaxial)
-                             rfelfd=3*int(bec),
+                             #rfelfd=3*int(bec),
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt_gamma,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
             elif pert.ipert == len(self.structure) + 4:
                 inp.set_vars(rfstrs=2,             # Activate the calculation of the strain perturbations (shear)
-                             rfelfd=3*int(bec),
+                             #rfelfd=3*int(bec),
                              rfdir=rfdir,
                              nqpt=1,               # One wavevector is to be considered
                              qpt=(0, 0, 0),        # q-wavevector.
-                             kptopt=3,             # No symmetries
+                             kptopt=kptopt_gamma,             # No symmetries
                              iscf=7,
                              paral_kgb=0
                              )
-
             inp.pop_tolerances()
             inp.set_vars(tolerance)
             # Adding buffer to help convergence ...
