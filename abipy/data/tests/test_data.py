@@ -17,9 +17,7 @@ class DataModuleTest(AbipyTest):
         paw_table = abidata.pseudos("1h.paw", "28ni.paw")
         assert paw_table.allpaw
         assert os.path.isfile(abidata.cif_file("al.cif"))
-        assert os.path.isfile(abidata.pyscript("plot_spectral_functions.py"))
-
-        assert os.path.isfile(abidata.var_file("abinit_vars.yml"))
+        assert os.path.isfile(abidata.pyscript("plot_bz.py"))
 
         d = abidata.get_mp_structures_dict()
         assert isinstance(d, dict) and d is abidata.get_mp_structures_dict()

@@ -1,4 +1,4 @@
-"""Tests for structure module"""
+"""Tests for abivars module"""
 from __future__ import print_function, division, unicode_literals, absolute_import
 
 import numpy as np
@@ -35,6 +35,8 @@ class TestAbinitInputFile(AbipyTest):
              "ntypat 1 typat 1 znucl 14 xred 0 0 0 ")
         inp = AbinitInputFile.from_string(s)
         repr(inp); str(inp)
+        assert inp.to_string(verbose=1)
+        assert inp._repr_html_()
         si1_structure = inp.structure
         assert inp.ndtset == 1 and len(si1_structure) == 1 and si1_structure.formula == "Si1"
 
@@ -75,6 +77,10 @@ class TestAbinitInputFile(AbipyTest):
         """
         inp = AbinitInputFile.from_string(s)
         assert inp.ndtset == 2
+        dt0 = inp.datasets[0]
+        repr(dt0); str(dt0)
+        assert dt0.to_string(verbose=2)
+        assert dt0._repr_html_()
         s0, s1 = inp.datasets[0].structure, inp.datasets[1].structure
         assert s0 != s1
         assert s1.volume == 8 * s0.volume

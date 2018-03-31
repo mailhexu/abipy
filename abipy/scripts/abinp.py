@@ -23,25 +23,34 @@ def get_structure(options):
         return abilab.Structure.from_file(options.filepath)
 
     elif options.filepath.startswith("mp-"):
-        return abilab.Structure.from_material_id(options.filepath, final=True,
-                                                 api_key=options.mapi_key, endpoint=options.endpoint)
+        return abilab.Structure.from_mpid(options.filepath, final=True,
+                                          api_key=options.mapi_key, endpoint=options.endpoint)
 
     raise TypeError("Don't know how to extract structure object from %s" % options.filepath)
 
 
 def get_pseudotable(options):
     """Return PseudoTable object."""
+    if options.pseudos is not None:
+        from abipy.flowtk import PseudoTable
+        return PseudoTable.as_table(options.pseudos)
+
     try:
         from pseudo_dojo import OfficialTables
     except ImportError as exc:
         print("PseudoDojo package not installed. Please install it with `pip install pseudo_dojo`")
+        print("or use `--pseudos FILE_LIST` to specify the pseudopotentials to use.")
         raise exc
 
     dojo_tables = OfficialTables()
     if options.usepaw:
         raise NotImplementedError("PAW table is missing")
+        #pseudos = dojo_tables["ONCVPSP-PBE-PDv0.2-accuracy"]
     else:
-        return dojo_tables["ONCVPSP-PBE-PDv0.2-accuracy"]
+        pseudos = dojo_tables["ONCVPSP-PBE-PDv0.2-accuracy"]
+
+    print("Using pseudos from PseudoDojo table", repr(pseudos))
+    return pseudos
 
 
 def finalize(obj, options):
@@ -53,17 +62,25 @@ def finalize(obj, options):
     return 0
 
 
-def build_abinit_input_from_file(options):
-    """Build and return an AbinitInput instance from filepath."""
+def build_abinit_input_from_file(options, **abivars):
+    """
+    Build and return an AbinitInput instance from filepath.
+
+    abivars are optional variables that will be added to the input.
+    """
     from abipy.abio.abivars import AbinitInputFile
     abifile = AbinitInputFile(options.filepath)
     pseudos = get_pseudotable(options)
     jdtset = options.jdtset
+    # Get vars from input
     abi_kwargs = abifile.datasets[jdtset - 1].get_vars()
     if abifile.ndtset != 1:
         cprint("# Input file contains %s datasets, will select jdtset index %s:" %
                (abifile.ndtset, jdtset), "yellow")
         abi_kwargs["jdtset"] = jdtset
+
+    # Add input abivars (if any).
+    abi_kwargs.update(abivars)
 
     return abilab.AbinitInput(abifile.structure, pseudos, pseudo_dir=None, comment=None, decorators=None, abi_args=None,
                               abi_kwargs=abi_kwargs, tags=None)
@@ -73,7 +90,10 @@ def abinp_validate(options):
     """Validate Abinit input file."""
     inp = build_abinit_input_from_file(options)
     r = inp.abivalidate()
-    print(r.log_file, r.stderr_file)
+    if r.retcode == 0:
+        print("Validation completed succesfully.")
+    else:
+        print(r.log_file, r.stderr_file)
 
     return r.retcode
 
@@ -83,6 +103,34 @@ def abinp_autoparal(options):
     inp = build_abinit_input_from_file(options)
     pconfs = inp.abiget_autoparal_pconfs(options.max_ncpus, autoparal=1, workdir=None, manager=None, verbose=options.verbose)
     print(pconfs)
+    return 0
+
+
+def abinp_abispg(options):
+    """Call Abinit with chkprim = 0 to find space group."""
+    inp = build_abinit_input_from_file(options, chkprim=0, mem_test=0)
+    r = inp.abivalidate()
+    if r.retcode != 0:
+        print(r.log_file, r.stderr_file)
+        return r.retcode
+
+    try:
+        out = abilab.abiopen(r.output_file.path)
+    except Exception as exc:
+        print("Error while trying to parse output file:", r.output_file.path)
+        print("Exception:\n", exc)
+        return 1
+
+    #print(out)
+    structure = out.initial_structure
+
+    # Call spglib to get spacegroup if Abinit spacegroup is not available.
+    # Return string with full information about crystalline structure i.e.
+    # space group, point group, wyckoff positions, equivalent sites.
+    print(structure.spget_summary(verbose=options.verbose))
+    if options.verbose:
+        print(structure.abi_spacegroup.to_string(verbose=options.verbose))
+
     return 0
 
 
@@ -110,6 +158,7 @@ def abinp_phperts(options):
     qpt = None if "qpt" in inp else [0, 0, 0]
     perts = inp.abiget_irred_phperts(qpt=qpt)
     print(perts)
+
     return 0
 
 
@@ -118,9 +167,10 @@ def abinp_gs(options):
     structure = abilab.Structure.from_file(options.filepath)
     pseudos = get_pseudotable(options)
     gsinp = factories.gs_input(structure, pseudos,
-                               kppa=None, ecut=None, pawecutdg=None, scf_nband=None, accuracy="normal", spin_mode="unpolarized",
+                               kppa=None, ecut=None, pawecutdg=None, scf_nband=None,
+                               accuracy="normal", spin_mode="unpolarized",
                                smearing="fermi_dirac:0.1 eV", charge=0.0, scf_algorithm=None)
-    print(gsinp._repr_html_())
+
     return finalize(gsinp, options)
 
 
@@ -146,7 +196,8 @@ def abinp_phonons(options):
     pseudos = get_pseudotable(options)
 
     gsinp = factories.gs_input(structure, pseudos,
-                               kppa=None, ecut=None, pawecutdg=None, scf_nband=None, accuracy="normal", spin_mode="unpolarized",
+                               kppa=None, ecut=None, pawecutdg=None, scf_nband=None,
+                               accuracy="normal", spin_mode="unpolarized",
                                smearing="fermi_dirac:0.1 eV", charge=0.0, scf_algorithm=None)
 
     multi = factories.phonons_from_gsinput(gsinp, ph_ngqpt=None, qpoints=None, with_ddk=True, with_dde=True, with_bec=False,
@@ -191,17 +242,23 @@ def abinp_anaph(options):
     return finalize(inp, options)
 
 
-@prof_main
-def main():
-
-    def str_examples():
-        return """\
+def get_epilog():
+    return r"""
 Usage example:
 
-    abinp.py validate run.abi       # Call abinit in dry-run mode to validate the run.abi input file
+######################
+# Require Abinit Input
+######################
+
+    abinp.py validate run.abi       # Call abinit to validate run.abi input file
+    abinp.py abispg run.abi         # Call abinit to get space group information.
     abinp.py autoparal run.abi      # Call abinit to get list of autoparal configurations.
     abinp.py ibz run.abi            # Call abinit to get list of k-points in the IBZ.
     abinp.py phperts run.abi        # Call abinit to get list of atomic perturbations for phonons.
+
+########################
+# Abinit Input Factories
+########################
 
     abinp.py gs si.cif > run.abi    # Build input for GS run for silicon structure read from CIF file.
                                     # Redirect output to run.abi.
@@ -210,10 +267,15 @@ Usage example:
                                     # materials project database. Requires internet connect and MAPI_KEY.
     abinp.py phonons POSCAR         # Build input for GS + DFPT calculation of phonons with DFPT.
     abinp.py phonons out_HIST.nc    # Build input for G0W0 run with (relaxed) structure read from HIST.nc file.
+
+########################
+# Anaddb Input Factories
+########################
+
     abinp.py anaph out_DDB          # Build anaddb input file for phonon bands + DOS from DDB file.
 
 
-Note that one can use pass any file that provides a pymatgen structure
+Note that one can use pass any file providing a pymatgen structure
 e.g. Abinit netcdf files, CIF files, POSCAR, ...
 Use `abinp.py --help` for help and `abinp.py COMMAND --help` to get the documentation for `COMMAND`.
 Use `-v` to increase verbosity level (can be supplied multiple times e.g -vv).
@@ -222,49 +284,44 @@ CAVEAT: This script provides a simplified interface to the AbiPy factory functio
 For a more flexible interface please use the AbiPy objects to generate input files and workflows.
 """
 
-    def show_examples_and_exit(err_msg=None, error_code=1):
-        """Display the usage of the script."""
-        sys.stderr.write(str_examples())
-        if err_msg:
-            sys.stderr.write("Fatal Error\n" + err_msg + "\n")
-        sys.exit(error_code)
 
+def get_parser(with_epilog=False):
+    """Build parser."""
     # Parent parser for common options.
     copts_parser = argparse.ArgumentParser(add_help=False)
     copts_parser.add_argument('-v', '--verbose', default=0, action='count', # -vv --> verbose=2
-                              help='verbose, can be supplied multiple times to increase verbosity')
+        help='verbose, can be supplied multiple times to increase verbosity')
     copts_parser.add_argument('--loglevel', default="ERROR", type=str,
-                              help="Set the loglevel. Possible values: CRITICAL, ERROR (default), WARNING, INFO, DEBUG")
+        help="Set the loglevel. Possible values: CRITICAL, ERROR (default), WARNING, INFO, DEBUG")
     copts_parser.add_argument("--mapi-key", default=None,
-                              help="Pymatgen MAPI_KEY used if mp identifier is used to select structure.\n"
-                                   "Use value in .pmgrc.yaml if not specified.")
+        help="Pymatgen MAPI_KEY used if mp identifier is used to select structure.\n"
+             "Use value in .pmgrc.yaml if not specified.")
     copts_parser.add_argument("--endpoint", help="Pymatgen database.", default="https://www.materialsproject.org/rest/v2")
 
     copts_parser.add_argument("-m", '--mnemonics', default=False, action="store_true",
-                              help="Print brief description of input variables in the input file.")
+        help="Print brief description of input variables in the input file.")
     copts_parser.add_argument('--usepaw', default=False, action="store_true",
-                              help="Use PAW pseudos instead of norm-conserving.")
+        help="Use PAW pseudos instead of norm-conserving.")
 
     # Parent parser for command options operating on Abinit input files.
     abiinput_parser = argparse.ArgumentParser(add_help=False)
-
     abiinput_parser.add_argument('--jdtset', default=1, type=int,
-                                help="jdtset index. Used to select the dataset index when the input file " +
-                                     "contains more than one dataset.")
+        help="jdtset index. Used to select the dataset index when the input file " +
+             "contains more than one dataset.")
+    abiinput_parser.add_argument("-p", '--pseudos', nargs="+", default=None, help="List of pseudopotentials")
 
     # Parent parser for commands that need to know the filepath for the structure.
     path_selector = argparse.ArgumentParser(add_help=False)
     path_selector.add_argument('filepath', type=str,
-                               help="File with the crystalline structure (netcdf, cif, POSCAR, input files ...)")
+        help="File with the crystalline structure (netcdf, cif, POSCAR, input files ...)")
 
-    parser = argparse.ArgumentParser(epilog=str_examples(), formatter_class=argparse.RawDescriptionHelpFormatter)
-
+    parser = argparse.ArgumentParser(epilog=get_epilog() if with_epilog else "",
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--loglevel', default="ERROR", type=str,
-                        help="Set the loglevel. Possible values: CRITICAL, ERROR (default), WARNING, INFO, DEBUG")
+        help="Set the loglevel. Possible values: CRITICAL, ERROR (default), WARNING, INFO, DEBUG")
     parser.add_argument('-V', '--version', action='version', version=abilab.__version__)
-
     parser.add_argument('-v', '--verbose', default=0, action='count', # -vv --> verbose=2
-                         help='verbose, can be supplied multiple times to increase verbosity')
+        help='verbose, can be supplied multiple times to increase verbosity')
 
     # Create the parsers for the sub-commands
     subparsers = parser.add_subparsers(dest='command', help='sub-command help',
@@ -279,13 +336,16 @@ For a more flexible interface please use the AbiPy objects to generate input fil
     p_autoparal = subparsers.add_parser('autoparal', parents=abifile_parsers, help=abinp_autoparal.__doc__)
     p_autoparal.add_argument("-n", '--max-ncpus', default=50, type=int, help="Maximum number of CPUs")
 
+    # Subparser for abispg command.
+    p_abispg = subparsers.add_parser('abispg', parents=abifile_parsers, help=abinp_abispg.__doc__)
+
     # Subparser for ibz command.
     p_ibz = subparsers.add_parser('ibz', parents=abifile_parsers, help=abinp_ibz.__doc__)
 
     # Subparser for phperts command.
     p_phperts = subparsers.add_parser('phperts', parents=abifile_parsers, help=abinp_phperts.__doc__)
 
-    inpgen_parsers = [copts_parser, path_selector]
+    inpgen_parsers = [copts_parser, path_selector, abiinput_parser]
 
     # Subparser for gs command.
     p_gs = subparsers.add_parser('gs', parents=inpgen_parsers, help=abinp_gs.__doc__)
@@ -301,6 +361,20 @@ For a more flexible interface please use the AbiPy objects to generate input fil
 
     # Subparser for anaph command.
     p_anaph = subparsers.add_parser('anaph', parents=inpgen_parsers, help=abinp_anaph.__doc__)
+
+    return parser
+
+@prof_main
+def main():
+
+    def show_examples_and_exit(err_msg=None, error_code=1):
+        """Display the usage of the script."""
+        sys.stderr.write(get_epilog())
+        if err_msg:
+            sys.stderr.write("Fatal Error\n" + err_msg + "\n")
+        sys.exit(error_code)
+
+    parser = get_parser(with_epilog=True)
 
     # Parse the command line.
     try:

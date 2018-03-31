@@ -14,11 +14,13 @@ from six.moves import cStringIO
 from tabulate import tabulate
 from monty.string import is_string
 from monty.itertools import iuptri
-
 from monty.functools import lazy_property
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.serializers.pickle_coders import SlotPickleMixin
-from abipy.core.kpoints import wrap_to_ws, issamek
+try:
+    from pymatgen.util.serialization import SlotPickleMixin
+except:
+    from pymatgen.serializers.pickle_coders import SlotPickleMixin
+from abipy.core.kpoints import wrap_to_ws, issamek, has_timrev_from_kptopt
 from abipy.iotools import as_etsfreader
 
 
@@ -57,7 +59,7 @@ def mati3inv(mat3, trans=True):
         mat3: (3, 3) matrix-like object with integer elements
 
     Returns:
-        `ndarray` with the TRANSPOSE of the inverse of mat3 if trans==True.
+        |numpy-array| with the TRANSPOSE of the inverse of mat3 if trans==True.
         If trans==False, the inverse of mat3 is returned.
 
     .. note::
@@ -65,13 +67,13 @@ def mati3inv(mat3, trans=True):
        Used for symmetry operations. This function applies to *ORTHOGONAL* matrices only.
        Since these form a group, inverses are also integer arrays.
     """
-    mat3 = np.array(mat3)
-    if mat3.dtype not in (np.int, np.int8, np.int16, np.int32, np.int64):
-        raise TypeError("Expecting integer matrix but received dtype %s" % mat3.dtype)
-    if mat3.shape != (3, 3):
-        raise TypeError("Expecting (3, 3) matrix but received shape %s" % str(mat3.shape))
+    mat3 = np.reshape(np.array(mat3, dtype=np.int), (3, 3))
+    #if mat3.dtype not in (np.int, np.int8, np.int16, np.int32, np.int64):
+    #    raise TypeError("Expecting integer matrix but received dtype %s" % mat3.dtype)
+    #if mat3.shape != (3, 3):
+    #    raise TypeError("Expecting (3, 3) matrix but received shape %s" % str(mat3.shape))
 
-    mit = np.empty((3,3), dtype=np.int)
+    mit = np.empty((3, 3), dtype=np.int)
     mit[0,0] = mat3[1,1] * mat3[2,2] - mat3[2,1] * mat3[1,2]
     mit[1,0] = mat3[2,1] * mat3[0,2] - mat3[0,1] * mat3[2,2]
     mit[2,0] = mat3[0,1] * mat3[1,2] - mat3[1,1] * mat3[0,2]
@@ -549,7 +551,7 @@ class AbinitSpaceGroup(OpSequence):
     def __init__(self, spgid, symrel, tnons, symafm, has_timerev, inord="C"):
         """
         Args:
-            spgid: space group number (from 1 to 232, 0 if cannot be specified).
+            spgid (int): space group number (from 1 to 232, 0 if cannot be specified).
             symrel: (nsym,3,3) array with the rotational part of the symmetries in real
                 space (reduced coordinates are assumed, see also `inord` for the order.
             tnons: (nsym,3) array with fractional translation in reduced coordinates.
@@ -605,11 +607,13 @@ class AbinitSpaceGroup(OpSequence):
         """Initialize the object from a Netcdf file."""
         r, closeit = as_etsfreader(ncfile)
 
+        kptopt = int(r.read_value("kptopt", default=1))
+
         new = cls(spgid=r.read_value("space_group"),
                   symrel=r.read_value("reduced_symmetry_matrices"),
                   tnons=r.read_value("reduced_symmetry_translations"),
                   symafm=r.read_value("symafm"),
-                  has_timerev=True,  # FIXME not treated by ETSF-IO.
+                  has_timerev=has_timrev_from_kptopt(kptopt),
                   inord=inord)
 
         if closeit:
@@ -620,10 +624,10 @@ class AbinitSpaceGroup(OpSequence):
     @classmethod
     def from_structure(cls, structure, has_timerev=True, symprec=1e-5, angle_tolerance=5):
         """
-        Takes a :class:`Structure` object. Uses spglib to perform various symmetry finding operations.
+        Takes a |Structure| object. Uses spglib to perform various symmetry finding operations.
 
         Args:
-            structure: :class:`Structure` object
+            structure: |Structure| object
             has_timerev: True is time-reversal symmetry is included.
             symprec: Tolerance for symmetry finding
             angle_tolerance: Angle tolerance for symmetry finding.
@@ -795,7 +799,6 @@ class LittleGroup(OpSequence):
         """
         True if the k-point is on the border of the BZ.
         """
-        from abipy.core.kpoints import wrap_to_ws
         frac_coords = np.array(self.kpoint)
         kreds = wrap_to_ws(frac_coords)
         diff = np.abs(np.abs(kreds) - 0.5)
@@ -878,7 +881,7 @@ class LatticeRotation(Operation):
 
     .. note::
 
-        This object is immutable and therefore we do not inherit from `ndarray``
+        This object is immutable and therefore we do not inherit from |numpy-array|.
     """
     _E3D = np.identity(3,  np.int)
 
@@ -945,11 +948,11 @@ class LatticeRotation(Operation):
         return self.__class__(-self.mat)
 
     def __pow__(self, intexp, modulo=1):
-       if intexp ==  0: return self.__class__(self._E3D)
-       if intexp  >  0: return self.__class__(self.mat ** intexp)
-       if intexp == -1: return self.inverse()
-       if intexp  <  0: return self.__pow__(-intexp).inverse()
-       raise TypeError("type %s is not supported in __pow__" % type(intexp))
+        if intexp ==  0: return self.__class__(self._E3D)
+        if intexp  >  0: return self.__class__(self.mat ** intexp)
+        if intexp == -1: return self.inverse()
+        if intexp  <  0: return self.__pow__(-intexp).inverse()
+        raise TypeError("type %s is not supported in __pow__" % type(intexp))
 
     @property
     def order(self):
@@ -1171,8 +1174,8 @@ class BilbaoPointGroup(object):
 
     def to_string(self, tablefmt="simple", numalign="left"):
         """
-        Write a string with the character_table to the given `stream`.
-        `tablefmt` and `numalign` options are passed to `tabulate`.
+        Write a string with the character_table to the given ``stream``.
+        ``tablefmt`` and ``numalign`` options are passed to ``tabulate``.
         """
         s = tabulate(self.character_table[1:], headers=self.character_table[0],
                      tablefmt=tablefmt, numalign=numalign)

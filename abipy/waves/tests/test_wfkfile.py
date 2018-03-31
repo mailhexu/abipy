@@ -15,8 +15,9 @@ class TestWFKFile(AbipyTest):
         """Testing WfkFile and waves from NC example data files."""
         wfk = WfkFile(abidata.ref_file("si_nscf_WFK.nc"))
         repr(wfk); str(wfk)
-        assert len(wfk.to_string(verbose=1))
+        assert len(wfk.to_string(verbose=2))
         assert wfk.nsppol == 1 and wfk.nspinor == 1 and wfk.nspden == 1
+        assert wfk.params["nspinor"] == wfk.nspinor
 
         spin, kpoint, band = (0, 0, 0)
         with self.assertRaises(ValueError):
@@ -24,7 +25,7 @@ class TestWFKFile(AbipyTest):
 
         wave = wfk.get_wave(spin, kpoint, band)
         repr(wave); str(wave)
-        assert len(wave.to_string(verbose=1))
+        assert len(wave.to_string(verbose=2))
         assert wave.structure is wfk.structure
         assert wave.shape == (wfk.nspinor, wave.npw)
         assert wave.isnc and not wave.ispaw
@@ -58,12 +59,12 @@ class TestWFKFile(AbipyTest):
         assert ur.shape == (8, 8, 8)
         self.assert_almost_equal(other_mesh.integrate(ur.conj() * ur) / wave.structure.volume, 1.0)
 
-        visu = wfk.visualize_ur2(spin=0, kpoint=0, band=0, visu_name="vesta")
-        assert callable(visu)
+        #visu = wfk.visualize_ur2(spin=0, kpoint=0, band=0, appname="vesta")
+        #assert callable(visu)
 
         # FFT and FFT^{-1} on the BOX.
-        visu = wave.visualize_ur2("xcrysden")
-        assert callable(visu)
+        #visu = wave.visualize_ur2(visu_name="xcrysden")
+        #assert callable(visu)
         ug_mesh = wave.mesh.fft_r2g(wave.ur)
         same_ur = wave.mesh.fft_g2r(ug_mesh)
 
@@ -91,6 +92,9 @@ class TestWFKFile(AbipyTest):
             assert wave.plot_line_neighbors(0, 3, num=100, with_krphase=False, show=False)
             assert wave.plot_line_neighbors(0, 3, num=100, with_krphase=True, show=False)
             assert wfk.ebands.plot(show=False)
+
+        if self.has_ipywidgets():
+            assert wfk.ipw_visualize_widget()
 
         if self.has_nbformat():
             wfk.write_notebook(nbpath=self.get_tmpname(text=True))

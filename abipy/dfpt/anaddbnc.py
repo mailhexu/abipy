@@ -5,6 +5,7 @@ AnaddbNcFile provides a high-level interface to the data stored in the anaddb.nc
 from __future__ import print_function, division, unicode_literals, absolute_import
 
 from monty.functools import lazy_property
+from monty.string import marquee
 from monty.termcolor import cprint
 from abipy.core.tensor import Tensor
 from abipy.core.mixins import AbinitNcFile, Has_Structure, NotebookWriter
@@ -13,6 +14,7 @@ from abipy.dfpt.phonons import InteratomicForceConstants
 from abipy.dfpt.ddb import Becs
 from abipy.dfpt.tensors import NLOpticalSusceptibilityTensor
 
+
 class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
     """
     AnaddbNcFile provides a high-level interface to the data stored in the anaddb.nc file.
@@ -20,7 +22,7 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
 
     .. attribute:: structure
 
-        Structure object.
+        |Structure| object.
 
     .. attribute:: emacro
 
@@ -33,7 +35,10 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
     .. attribute:: ifc
 
         :class:`InteratomicForceConstants` object with the interatomic force constants calculated by anaddb.
-        None, if the netcdf file does not contain the IFCs,
+        None, if the netcdf file does not contain the IFCs.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: AnaddbNcFile
     """
 
     @classmethod
@@ -42,12 +47,35 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
         return cls(filepath)
 
     def __init__(self, filepath):
-        super(AbinitNcFile, self).__init__(filepath)
+        super(AnaddbNcFile, self).__init__(filepath)
         self.reader = ETSF_Reader(filepath)
         self._structure = self.reader.read_structure()
 
     def close(self):
         self.reader.close()
+
+    @lazy_property
+    def params(self):
+        return {}
+
+    def __str__(self):
+        return self.to_string()
+
+    def to_string(self, verbose=0):
+        """
+        String representation
+
+        Args:
+            verbose: verbosity level.
+        """
+        lines = []; app = lines.append
+
+        app(marquee("File Info", mark="="))
+        app(self.filestat(as_string=True))
+        app("")
+        app(self.structure.to_string(verbose=verbose, title="Structure"))
+
+        return "\n".join(lines)
 
     @property
     def structure(self):
@@ -93,8 +121,8 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
     def ifc(self):
         """
         The interatomic force constants calculated by anaddb.
-        The following anaddb variables should be used in the run: ifcflag, natifc, atifc, ifcout
-        Return None, if the netcdf file does not contain the IFCs,
+        The following anaddb variables should be used in the run: ``ifcflag``, ``natifc``, ``atifc``, ``ifcout``.
+        Return None, if the netcdf_ file does not contain the IFCs,
         """
         try:
             return InteratomicForceConstants.from_file(self.filepath)
@@ -107,7 +135,7 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
     def dchide(self):
         """
         Non-linear optical susceptibility tensor.
-        Returns a NLOpticalSusceptibilityTensor or None if the file does not contain this information.
+        Returns a :class:`NLOpticalSusceptibilityTensor` or None if the file does not contain this information.
         """
         try:
             return NLOpticalSusceptibilityTensor(self.reader.read_value("dchide"))
@@ -121,7 +149,7 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
         First-order change in the linear dielectric susceptibility.
         Returns a list of lists of 3x3 Tensor object with shape (number of atoms, 3).
         The [i][j] element of the list contains the Tensor representing the change due to the
-         displacement of the ith atom in the jth direction.
+        displacement of the ith atom in the jth direction.
         None if the file does not contain this information.
         """
         try:
@@ -141,20 +169,20 @@ class AnaddbNcFile(AbinitNcFile, Has_Structure, NotebookWriter):
     @lazy_property
     def oscillator_strength(self):
         """
-        A complex numpy array containing the oscillator strengths with shape (number of phonon modes, 3, 3),
+        A complex |numpy-array| containing the oscillator strengths with shape (number of phonon modes, 3, 3),
         in a.u. (1 a.u.=253.2638413 m3/s2).
         None if the file does not contain this information.
         """
         try:
             return self.reader.read_value("oscillator_strength", cmode="c")
         except Exception as exc:
-            print(exc, "Requires dieflag == 1, 3 or 4", "Returning None", sep="\n")
+            print(exc, "Oscillator strengths require dieflag == 1, 3 or 4", "Returning None", sep="\n")
             raise
             return None
 
     def write_notebook(self, nbpath=None):
         """
-        Write an ipython notebook to nbpath. If nbpath is None, a temporay file in the current
+        Write an jupyter_ notebook to nbpath. If ``nbpath`` is None, a temporay file in the current
         working directory is created. Return path to the notebook.
         """
         nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)

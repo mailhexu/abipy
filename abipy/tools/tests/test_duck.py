@@ -2,7 +2,6 @@
 """Tests for duck module."""
 from __future__ import division, print_function, absolute_import, unicode_literals
 
-
 import numpy as np
 
 from abipy.core.testing import AbipyTest
@@ -42,7 +41,9 @@ class DuckTest(AbipyTest):
         for t in (np.int32, np.int64, np.float64):
             assert duck.is_intlike(t(123))
 
-        assert not duck.is_intlike(np.complex(123))
+        assert duck.is_intlike(np.complex(123))
+        assert not duck.is_intlike(np.complex(123.2))
+        assert not duck.is_intlike(123 + 1j * 2)
 
     def test_is_listlike(self):
         """Testing is_listlike."""
@@ -54,3 +55,9 @@ class DuckTest(AbipyTest):
         d = {"hello": 1, "world": 2}
         #assert not duck.is_listlike(d)
         #assert duck.is_listlike(range(1, 3))
+
+    def test_list_ints(self):
+        """Testing list_ints."""
+        assert duck.list_ints(1) == [1]
+        assert duck.list_ints([1]) == [1]
+        assert duck.list_ints([1, 2, 3]) == [1, 2, 3]

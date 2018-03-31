@@ -1,18 +1,19 @@
-.. image:: https://badge.fury.io/py/abipy.svg
-        :target: https://badge.fury.io/py/abipy
-
-.. image:: https://travis-ci.org/abinit/abipy.svg?branch=master
-        :target: https://travis-ci.org/abinit/abipy
-
-.. image:: https://coveralls.io/repos/github/abinit/abipy/badge.svg?branch=develop
-        :target: https://coveralls.io/github/abinit/abipy?branch=develop
-
-.. image:: https://img.shields.io/badge/license-GPL-blue.svg
-
 .. htmlonly::
-
     :Release: |version|
     :Date: |today|
+
+
+.. list-table::
+    :stub-columns: 1
+    :widths: 10 90
+
+    * - Package
+      - |pypi-version| |download-with-anaconda| |supported-versions|
+    * - Continuous Integration
+      - |travis-status| |coverage-status| 
+    * - Documentation
+      - |docs-stable| |docs-devel| |launch-nbviewer| |launch-binder| 
+
 
 Getting Started
 ===============
@@ -22,7 +23,8 @@ Getting Started
 
    features
    installation
-   whats_new
+   changelog
+   zzbiblio
 
 Post-processing
 ===============
@@ -30,16 +32,20 @@ Post-processing
 .. toctree::
    :maxdepth: 1
 
-   scripts
-   examples/plot/index.rst
+   scripts/index
+   gallery/index
+   postprocessing_howto
 
-Calculations
-============
+Workflows
+=========
 
 .. toctree::
    :maxdepth: 1
 
-   taskmanager
+   workflows/taskmanager
+   workflows/manager_examples
+   flow_gallery/index
+.. flows_howto
 
 API
 ===
@@ -47,15 +53,16 @@ API
 .. toctree::
    :maxdepth: 1
 
-   api/index.rst
-   devel/index.rst
+   api/index
+   coding_guide
+   README
 
 Indices and tables
 ==================
 
-  * :ref:`genindex`
-  * :ref:`modindex`
-  * :ref:`search`
+    :ref:`genindex` 
+    :ref:`modindex` 
+    :ref:`search` 
 
 License
 =======

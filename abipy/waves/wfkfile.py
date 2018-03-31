@@ -8,7 +8,7 @@ import numpy as np
 from monty.functools import lazy_property
 from monty.string import marquee # is_string, list_strings,
 from abipy.core import Mesh3D, GSphere, Structure
-from abipy.core.mixins import AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter
+from abipy.core.mixins import AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter
 from abipy.iotools import ETSF_Reader, Visualizer
 from abipy.electrons.ebands import ElectronsReader
 from abipy.waves.pwwave import PWWaveFunction
@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 
-class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
+class WfkFile(AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter):
     """
     This object provides a simple interface to access and analyze
     the data stored in the WFK file produced by ABINIT.
@@ -34,13 +34,16 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         wfk.ebands.plot_ebands()
 
         # Visualize crystalline structure with vesta.
-        visu = wfk.visualize_structure_with("vesta")()
+        wfk.visualize_structure_with("vesta")
 
         # Visualize u(r)**2 with vesta.
-        visu = wfk.visualize_ur2(spin=0, kpoint=0, band=0, visu="vesta")()
+        wfk.visualize_ur2(spin=0, kpoint=0, band=0, appname="vesta")
 
         # Get a wavefunction.
         wave = wfk.get_wave(spin=0, kpoint=[0, 0, 0], band=0)
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: WfkFile
     """
     def __init__(self, filepath):
         """
@@ -74,14 +77,20 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
     def close(self):
         self.reader.close()
 
+    @lazy_property
+    def params(self):
+        """:class:`OrderedDict` with parameters that might be subject to convergence studies."""
+        od = self.get_ebands_params()
+        return od
+
     @property
     def structure(self):
-        """:class:`Structure` object"""
+        """|Structure| object."""
         return self.ebands.structure
 
     @property
     def ebands(self):
-        """:class:`ElectronBands` object"""
+        """|ElectronBands| object"""
         return self._ebands
 
     @property
@@ -109,9 +118,12 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         app(marquee("File Info", mark="="))
         app(self.filestat(as_string=True))
         app("")
-        app(marquee("Structure", mark="="))
-        app(str(self.structure))
-        app(self.ebands.to_string(with_structure=False, title="Electronic Bands"))
+        app(self.structure.to_string(verbose=verbose, title="Structure"))
+        app(self.ebands.to_string(with_structure=False, verbose=verbose, title="Electronic Bands"))
+
+        if verbose > 1:
+            app("")
+            app(self.hdr.to_string(verbose=verbose, title="Abinit Header"))
 
         return "\n".join(lines)
 
@@ -162,21 +174,22 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         else:
             return wave.export_ur2(filepath, visu=visu)
 
-    def visualize_ur2(self, spin, kpoint, band, visu_name):
+    def visualize_ur2(self, spin, kpoint, band, appname="vesta"):
         """
         Visualize :math:`|u(r)|^2`  with visualizer.
         See :class:`Visualizer` for the list of applications and formats supported.
         """
-        visu = Visualizer.from_name(visu_name)
+        visu = Visualizer.from_name(appname)
 
         for ext in visu.supported_extensions():
             ext = "." + ext
             try:
-                return self.export_ur2(ext, spin, kpoint, band, visu=visu)
+                v = self.export_ur2(ext, spin, kpoint, band, visu=visu)
+                return v()
             except visu.Error:
                 pass
         else:
-            raise visu.Error("Don't know how to export data for visualizer %s" % visu_name)
+            raise visu.Error("Don't know how to export data for visualizer %s" % appname)
 
     #def classify_states(self, spin, kpoint, band_range=None, energy_range=None, atol=1e-3):
     #    """
@@ -242,6 +255,28 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
 
     #    #return wclass
 
+    def ipw_visualize_widget(self):
+        """
+        Return an ipython widget with controllers to visualize the wavefunctions.
+
+        .. warning::
+
+            It seems there's a bug with Vesta on MacOs if the user tries to open multiple wavefunctions
+            as the tab in vesta is not updated!
+        """
+        def wfk_visualize(spin, kpoint, band, appname):
+            kpoint = int(kpoint.split()[0])
+            self.visualize_ur2(spin, kpoint, band, appname=appname)
+
+        import ipywidgets as ipw
+        return ipw.interact_manual(
+                wfk_visualize,
+                spin=list(range(self.nsppol)),
+                kpoint=["%d %s" % (i, repr(kpt)) for i, kpt in enumerate(self.kpoints)],
+                band=list(range(self.nband)),
+                appname=[v.name for v in Visualizer.get_available()],
+            )
+
     def write_notebook(self, nbpath=None):
         """
         Write an ipython notebook to nbpath. If nbpath is None, a temporay file in the current
@@ -252,19 +287,25 @@ class WfkFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         nb.cells.extend([
             nbv.new_code_cell("wfk = abilab.abiopen('%s')" % self.filepath),
             nbv.new_code_cell("print(wfk)"),
-            nbv.new_code_cell("fig = wfk.ebands.plot()"),
-            nbv.new_code_cell("fig = wfk.ebands.kpoints.plot()"),
-            nbv.new_code_cell("fig = wfk.ebands.plot()"),
+            nbv.new_code_cell("wfk.ebands.plot();"),
+            nbv.new_code_cell("wfk.ebands.kpoints.plot();"),
+            nbv.new_code_cell("wfk.ebands.plot();"),
             nbv.new_code_cell("""\
 if wfk.ebands.kpoints.is_ibz:
-    fig = wfk.ebands.get_edos().plot()"""),
+    wfk.ebands.get_edos().plot();"""),
+            nbv.new_code_cell("wfk.ipw_visualize_widget()"),
         ])
 
         return self._write_nb_nbpath(nb, nbpath)
 
 
 class WFK_Reader(ElectronsReader):
-    """This object reads data from the WFK file."""
+    """
+    This object reads data from the WFK file.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: Wfk_Reader
+    """
 
     def __init__(self, filepath):
         """Initialize the object from a filename."""

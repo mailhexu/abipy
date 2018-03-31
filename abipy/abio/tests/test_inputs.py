@@ -6,7 +6,7 @@ import numpy as np
 import abipy.data as abidata
 
 from abipy import abilab
-from abipy.core.testing import AbipyTest, has_abinit
+from abipy.core.testing import AbipyTest
 from abipy.abio.inputs import *
 from abipy.abio.input_tags import *
 
@@ -122,6 +122,14 @@ class TestAbinitInput(AbipyTest):
         self.serialize_with_pickle(inp, test_eq=False)
         self.assertMSONable(inp)
 
+        # Test generate method.
+        ecut_list = [10, 20]
+        for i, ginp in enumerate(inp.generate(ecut=ecut_list)):
+            assert ginp["ecut"] == ecut_list[i]
+
+        inp_list = list(inp.generate(ecut=[10, 20], nsppol=[1, 2]))
+        assert len(inp_list) == 4
+
         # Test tags
         assert isinstance(inp.tags, set)
         assert len(inp.tags) == 0
@@ -169,11 +177,21 @@ class TestAbinitInput(AbipyTest):
         assert inp["kptopt"] == 1 and inp["nshiftk"] == 2
         assert inp.uses_ktimereversal
 
+        inp.set_gamma_sampling()
+        assert inp["kptopt"] == 1 and inp["nshiftk"] == 1
+        assert np.all(inp["shiftk"] == 0)
+
         inp.set_autokmesh(nksmall=2)
         assert inp["kptopt"] == 1 and np.all(inp["ngkpt"] == [2, 2, 2]) and inp["nshiftk"] == 4
 
         inp.set_kpath(ndivsm=3, kptbounds=None)
-        assert inp["iscf"] == -2 and len(inp["kptbounds"]) == 12
+        assert inp["ndivsm"] == 3 and inp["iscf"] == -2 and len(inp["kptbounds"]) == 12
+
+        inp.set_qpath(ndivsm=3, qptbounds=None)
+        assert len(inp["ph_qpath"]) == 12 and inp["ph_nqpath"] == 12 and inp["ph_ndivsm"] == 3
+
+        inp.set_phdos_qmesh(nqsmall=16, method="tetra")
+        assert inp["ph_intmeth"] == 2 and np.all(inp["ph_ngqpt"] == 16) and np.all(inp["ph_qshift"] == 0)
 
         inp.set_kptgw(kptgw=(1, 2, 3, 4, 5, 6), bdgw=(1, 2))
         assert inp["nkptgw"] == 2 and np.all(inp["bdgw"].ravel() == np.array(len(inp["kptgw"]) * [1,2]).ravel())
@@ -258,10 +276,31 @@ class TestAbinitInput(AbipyTest):
         inp_si.set_vars(ecut=2, toldfe=1e-6)
         self.abivalidate_input(inp_si)
 
+        # TODO: Here spglib and abinit do not agree.
+        # Test abiget_spacegroup
+        #structure_with_abispg = inp_gan.abiget_spacegroup()
+        #assert structure_with_abispg.abispg is not None
+        #assert structure_with_abispg.abispg.spgid == 227
+
+        # Test abiget_spacegroup for Si
+        structure_with_abispg = inp_si.abiget_spacegroup()
+        assert structure_with_abispg.abi_spacegroup is not None
+        assert structure_with_abispg.abi_spacegroup.spgid == 227
+
         # Test abiget_ibz
         ibz = inp_si.abiget_ibz()
-        assert np.all(ibz.points == [[ 0. ,  0. ,  0. ], [ 0.5,  0. ,  0. ], [ 0.5,  0.5,  0. ]])
+        assert np.all(ibz.points == [[ 0.,  0.,  0.], [0.5,  0.,  0.], [0.5, 0.5, 0.]])
         assert np.all(ibz.weights == [0.125,  0.5,  0.375])
+
+        # This to test what happes with wrong inputs and Abinit errors.
+        wrong = inp_si.deepcopy()
+        removed = wrong.pop_vars("ecut")
+        assert "ecut" not in wrong
+        assert "ecut" in removed
+        assert removed["ecut"] == 2
+        with self.assertRaises(wrong.Error):
+            #wrong["ecut"] = -12.0
+            wrong.abiget_ibz(ngkpt=[-1, -1, -1])
 
         # Test abiget_irred_phperts
         # [{'idir': 1, 'ipert': 1, 'qpt': [0.0, 0.0, 0.0]}]
@@ -412,7 +451,7 @@ class TestAbinitInput(AbipyTest):
         #####################
         # Non-linear methods
         ####################
-        if has_abinit('8.3.2'):
+        if self.has_abinit(version='8.3.2'):
             dte_inputs = gs_inp.make_dte_inputs(phonon_pert=True, skip_permutations=True)
             print("dte inputs\n", dte_inputs)
             assert len(dte_inputs) == 8
@@ -459,6 +498,10 @@ class TestMultiDataset(AbipyTest):
         multi.set_vars(ecut=2)
         assert all(inp["ecut"] == 2 for inp in multi)
         self.assert_equal(multi.get("ecut"), [2, 2])
+
+        df = multi.get_vars_dataframe("ecut", "foobar")
+        assert "ecut" in df
+        self.assert_equal(df["ecut"].values, [2, 2])
 
         multi[1].set_vars(ecut=1)
         assert multi[0]["ecut"] == 2 and multi[1]["ecut"] == 1
@@ -670,7 +713,7 @@ class OpticInputTest(AbipyTest):
         for var in OpticInput._VARIABLES:
             repr(var); str(var)
             assert str(var.help) and var.group
-            assert str(var.html_link(tag="foo"))
+            assert str(var.html_link(label="foo"))
 
         with self.assertRaises(optic_input.Error):
             optic_input["foo"] = 23
@@ -697,11 +740,10 @@ class OpticInputTest(AbipyTest):
             nonlin_comp=(123, 222),    # Non-linear coefficients to be computed
         )
 
-
         repr(optic_input); str(optic_input)
-        #print(optic_input)
-        #print(optic_input._repr_html_())
-        #assert 0
+        assert optic_input.to_string(verbose=2)
+        # TODO
+        #assert optic_input._repr_html_()
         assert optic_input.vars
 
         # Compatible with Pickle and MSONable?
@@ -711,3 +753,12 @@ class OpticInputTest(AbipyTest):
         #self.assertMSONable(optic_input)
 
         self.abivalidate_input(optic_input)
+
+        # Test helper functions
+        si_structure = abidata.structure_from_ucell("Si")
+        comps = optic_input.only_independent_chi_components(si_structure)
+        assert comps == ["xx"]
+        assert optic_input["num_lin_comp"] == 1
+        assert optic_input["lin_comp"] == [11]
+        self.abivalidate_input(optic_input)
+        #print(optic_input)

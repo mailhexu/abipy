@@ -16,7 +16,7 @@ from monty.bisect import index as bs_index
 from abipy.core.func1d import Function1D
 from abipy.core.kpoints import Kpoint, KpointList
 from abipy.core.gsphere import GSphere
-from abipy.core.mixins import AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter
+from abipy.core.mixins import AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter
 from abipy.electrons.ebands import ElectronBands
 from abipy.iotools import ETSF_Reader
 from abipy.tools.plotting import ArrayPlotter, plot_array, data_from_cplx_mode, add_fig_kwargs, get_ax_fig_plt, set_axlims
@@ -30,16 +30,17 @@ _COLOR_CMODE = dict(re="red", im="blue", abs="black", angle="green")
 
 
 def _latex_symbol_cplxmode(symbol, cplx_mode):
-    """Latex label to be used to plot `symbol` in `cplx_mode`."""
+    """Latex label to be used to plot ``symbol`` in ``cplx_mode``."""
     return {"re": r"$\Re(" + symbol + ")$",
             "im": r"$\Im(" + symbol + ")$",
             "abs": r"$||" + symbol + "||$",
             "angle": r"$Phase(" + symbol + ")$"}[cplx_mode]
 
 
-class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
+# TODO: Should contain ElectronBands.
+class ScrFile(AbinitNcFile, Has_Header, Has_Structure, NotebookWriter):
     """
-    This object provides an interface to the `SCR.nc` file produced by the GW code.
+    This object provides an interface to the ``SCR.nc`` file produced by the GW code.
 
     Usage example:
 
@@ -48,6 +49,9 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
         with ScrFile("foo_SCR.nc") as ncfile:
             print(ncfile)
             ncfile.plot_emacro()
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: ScrFile
     """
     @classmethod
     def from_file(cls, filepath):
@@ -59,7 +63,7 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
         self.reader = ScrReader(filepath)
 
     def close(self):
-        """Close file."""
+        """Close the file."""
         self.reader.close()
 
     def __str__(self):
@@ -72,13 +76,11 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
         app(marquee("File Info", mark="="))
         app(self.filestat(as_string=True))
         app("")
-        app(marquee("Structure", mark="="))
-        app(str(self.structure))
+        app(self.structure.to_string(verbose=verbose, title="Structure"))
         app("")
         # TODO: Fix problem with efermi
         #app(self.ebands.to_string(with_structure=False, title="Electronic Bands"))
-        app(marquee("K-points for screening function", mark="="))
-        app(str(self.kpoints))
+        app(self.kpoints.to_string(verbose=verbose, title="K-points for screening function"))
         app("")
         app("Number of G-vectors in screening matrices: %d" % self.ng)
         app("Number of frequencies: %d (real: %d, imaginary: %d)" % (self.nw, self.nrew, self.nimw))
@@ -86,11 +88,15 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
         if verbose:
             app(str(self.params))
 
+        if verbose > 1:
+            app("")
+            app(self.hdr.to_string(verbose=verbose, title="Abinit Header"))
+
         return "\n".join(lines)
 
     @property
     def structure(self):
-        """Crystalline structure."""
+        """|Structure| object."""
         return self.reader.structure
 
     @property
@@ -101,7 +107,7 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
     @lazy_property
     def ebands(self):
         """
-        :class:`ElectronBands` object with the single-particle energies used to compute the screening.
+        |ElectronBands| object with the single-particle energies used to compute the screening.
         """
         ebands = ElectronBands.from_file(self.filepath)
         # FIXME
@@ -117,7 +123,7 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
     @property
     def wpoints(self):
         """
-        Array of complex numbers with the frequencies of the dielectric function in Ha.
+        Array of complex numbers with the frequencies of the dielectric function in Hartree.
         """
         return self.reader.wpoints
 
@@ -138,39 +144,42 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
 
     @property
     def netcdf_name(self):
-        """The etsf-io name associated to the data on disk."""
+        """The netcdf_ name associated to the data on disk."""
         return self.reader.netcdf_name
 
     @lazy_property
     def params(self):
         """
-        :class:`AttrDict` with the most important parameters used to compute the screening
-        keys can be accessed with the dot notation i.e. `params.zcut`.
+        |AttrDict| with the most important parameters used to compute the screening
+        keys can be accessed with the dot notation i.e. ``params.zcut``.
         """
+        #od = self.get_ebands_params()
         return self.reader.read_params()
 
     @add_fig_kwargs
-    def plot_emacro(self, cplx_mode="re-im", ax=None, xlims=None, **kwargs):
-        """
+    def plot_emacro(self, cplx_mode="re-im", ax=None, xlims=None, fontsize=12, **kwargs):
+        r"""
         Plot the macroscopic dielectric function with local-field effects.
 
         Args:
             cplx_mode: string defining the data to print.
-                Possible choices are (case-insensitive): `re` for the real part
-                "im" for the imaginary part, "abs" for the absolute value.
+                Possible choices are (case-insensitive):
+                "re" for the real part. "im" for the imaginary part.
+                "abs" for the absolute value.
                 "angle" will display the phase of the complex number in radians.
-                Options can be concatenated with "-" e.g. "re-im"
-            xlims: Set the data limits for the x-axis in eV. Accept tuple e.g. `(left, right)`
-                or scalar e.g. `left`. If left (right) is None, default values are used
-            ax: matplotlib :class:`Axes` or None if a new figure should be created.
+                Options can be concatenated with ``-`` e.g. ``re-im``.
+            xlims: Set the data limits for the x-axis in eV. Accept tuple e.g. (left, right)
+                or scalar e.g. left. If left (right) is None, default values are used.
+            ax: |matplotlib-Axes| or None if a new figure should be created.
+            fontsize: Legend and title fontsize.
 
         Returns:
-            matplotlib figure.
+            |matplotlib-Figure|
         """
         emlf = self.reader.read_emacro_lf()
         xx, yy = emlf.mesh * pmgu.Ha_to_eV, emlf.values
 
-        ax, fig, plt = get_ax_fig_plt(ax)
+        ax, fig, plt = get_ax_fig_plt(ax=ax)
         for c in cplx_mode.lower().split("-"):
             ax.plot(xx, data_from_cplx_mode(c, yy),
                     color=_COLOR_CMODE[c], linewidth=kwargs.get("linewidth", 2),
@@ -180,40 +189,52 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
         set_axlims(ax, xlims, "x")
         ax.grid(True)
         ax.set_xlabel(r"$\omega$ [eV]")
-        ax.legend(loc="best")
+        ax.legend(loc="best", shadow=True, fontsize=fontsize)
 
         return fig
 
     @add_fig_kwargs
-    def plot_eelf(self, ax=None, xlims=None, **kwargs):
-        """
+    def plot_eelf(self, ax=None, xlims=None, fontsize=12, **kwargs):
+        r"""
         Plot electron energy loss function.
 
         Args:
-            ax: matplotlib :class:`Axes` or None if a new figure should be created.
-            xlims: Set the data limits for the x-axis in eV. Accept tuple e.g. `(left, right)`
-                   or scalar e.g. `left`. If left (right) is None, default values are used
+            ax: |matplotlib-Axes| or None if a new figure should be created.
+            xlims: Set the data limits for the x-axis in eV. Accept tuple e.g. ``(left, right)``
+                   or scalar e.g. ``left``. If left (right) is None, default values are used
+            fontsize: Legend and label fontsize:
 
-        Returns:
-            matplotlib figure.
+        Returns: |matplotlib-Figure|
         """
         eelf = self.reader.read_eelf()
         xx, yy = eelf.mesh * pmgu.Ha_to_eV, eelf.values
 
-        ax, fig, plt = get_ax_fig_plt(ax)
+        ax, fig, plt = get_ax_fig_plt(ax=ax)
         ax.plot(xx, yy, linewidth=kwargs.get("linewidth", 2),
                 linestyle=kwargs.get("linestyle", "solid"), label="EELF")
 
         set_axlims(ax, xlims, "x")
         ax.grid(True)
         ax.set_xlabel(r"$\omega$ [eV]")
-        ax.legend(loc="best")
+        ax.legend(loc="best", fontsize=fontsize, shadow=True)
 
         return fig
 
+    def yield_figs(self, **kwargs):  # pragma: no cover
+        """
+        This function *generates* a predefined list of matplotlib figures with minimal input from the user.
+        Used in abiview.py to get a quick look at the results.
+        """
+        edos = self.ebands.get_edos()
+        yield self.ebands.plot_with_edos(edos, show=False)
+        # Plot spectra if there are enough frequencies.
+        if self.nrew > 2:
+            yield self.plot_emacro(show=False)
+            yield self.plot_eelf(show=False)
+
     def write_notebook(self, nbpath=None):
         """
-        Write a jupyter notebook to nbpath. If nbpath is None, a temporay file in the current
+        Write a jupyter_ notebook to nbpath. If ``nbpath`` is None, a temporay file in the current
         working directory is created. Return path to the notebook.
         """
         nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)
@@ -222,15 +243,15 @@ class ScrFile(AbinitNcFile, Has_Structure, NotebookWriter):
             nbv.new_code_cell("ncfile = abilab.abiopen('%s')" % self.filepath),
             nbv.new_code_cell("print(ncfile)"),
             nbv.new_code_cell("print(ncfile.params)"),
-            #nbv.new_code_cell("fig = ncfile.ebands.plot()"),
-            nbv.new_code_cell("edos = ncfile.ebands.get_edos()\nfig = ncfile.ebands.plot_with_edos(edos)"),
+            #nbv.new_code_cell("ncfile.ebands.plot();"),
+            nbv.new_code_cell("edos = ncfile.ebands.get_edos()\nncfile.ebands.plot_with_edos(edos);"),
         ])
 
         if self.nrew > 2:
             # Plot optical properties and EELF
             nb.cells.extend([
-                nbv.new_code_cell("fig = ncfile.plot_emacro()"),
-                nbv.new_code_cell("fig = ncfile.plot_eelf()"),
+                nbv.new_code_cell("ncfile.plot_emacro();"),
+                nbv.new_code_cell("ncfile.plot_eelf();"),
             ])
 
         return self._write_nb_nbpath(nb, nbpath)
@@ -241,9 +262,12 @@ class ScrReader(ETSF_Reader):
     This object reads the results stored in the SCR (Screening) file produced by ABINIT.
     It provides helper functions to access the most important quantities.
 
-    #double inverse_dielectric_function(number_of_qpoints_dielectric_function,
-    # number_of_frequencies_dielectric_function, number_of_spins, number_of_spins,
-    # number_of_coefficients_dielectric_function, number_of_coefficients_dielectric_function, complex)
+    double inverse_dielectric_function(number_of_qpoints_dielectric_function,
+    number_of_frequencies_dielectric_function, number_of_spins, number_of_spins,
+    number_of_coefficients_dielectric_function, number_of_coefficients_dielectric_function, complex)
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: ScrReader
     """
     def __init__(self, filepath):
         super(ScrReader, self).__init__(filepath)
@@ -288,8 +312,7 @@ class ScrReader(ETSF_Reader):
         the parameters that may be subject to convergence studies.
 
         Returns:
-            :class:`AttrDict` a dictionary whose keys can be accessed
-            with the dot notation i.e. d.key.
+            |AttrDict| a dictionary whose keys can be accessed with the dot notation i.e. ``d.key``.
         """
         # TODO: ecuteps is missing!
         keys = ["ikxc", "inclvkb", "gwcalctyp", "nbands_used", "npwwfn_used",
@@ -304,11 +327,9 @@ class ScrReader(ETSF_Reader):
 
     def read_emacro_lf(self, kpoint=(0, 0, 0)):
         """
-        Read the macroscopic dielectric function *with* local field effects
+        Read the macroscopic dielectric function *with* local field effects 1 / em1_{0,0)(kpoint, omega).
 
-            1/ em1_{0,0)(kpoint, omega).
-
-        Return: :class:`Function1D` object.
+        Return: |Function1D| object.
         """
         if self.netcdf_name == "inverse_dielectric_function":
             em1 = self.read_wslice(kpoint, ig1=0, ig2=0)
@@ -320,11 +341,9 @@ class ScrReader(ETSF_Reader):
 
     def read_emacro_nlf(self, kpoint=(0, 0, 0)):
         """
-        Read the macroscopic dielectric function *without* local field effects.
+        Read the macroscopic dielectric function *without* local field effects e_{0,0)(kpoint, omega).
 
-            e_{0,0)(kpoint, omega).
-
-        Return: :class:`Function1D`
+        Return: |Function1D|
 
         .. warning::
 
@@ -345,7 +364,7 @@ class ScrReader(ETSF_Reader):
 
             - Im(1/ emacro)
 
-        Return: :class:`Function1D` object.
+        Return: |Function1D| object.
         """
         # eelf = -Im(1 / eM)
         emacro_lf = self.read_emacro_lf(kpoint=kpoint)
@@ -356,8 +375,8 @@ class ScrReader(ETSF_Reader):
 
     def read_wggmat(self, kpoint, spin1=0, spin2=0, cls=None):
         """
-        Read data at the given k-point and return an instance of `cls` where
-        `cls` is a subclass of `_AwggMatrix`
+        Read data at the given k-point and return an instance of ``cls`` where
+        ``cls`` is a subclass of :class:`_AwggMatrix`
         """
         cls = _AwggMatrix.class_from_netcdf_name(self.netcdf_name) if cls is None else cls
 
@@ -383,7 +402,7 @@ class ScrReader(ETSF_Reader):
     def find_kpoint_fileindex(self, kpoint):
         """
         Returns the k-point and the index of the k-point in the netcdf file.
-        Accepts :class:`Kpoint` or integer
+        Accepts |Kpoint| instance or integer.
         """
         if duck.is_intlike(kpoint):
             ik = int(kpoint)
@@ -404,7 +423,7 @@ class ScrReader(ETSF_Reader):
 class _AwggMatrix(object):
     r"""
     Base class for two-point functions expressed in reciprocal space
-    i.e. a complex matrix $A_{G,G'}(\omega)$ where G, G' are reciprocal
+    i.e. a complex matrix :math:`A_{G,G'}(\omega)` where G, G' are reciprocal
     lattice vectors defines inside the G-sphere.
 
     This class is not supposed to be instantiated directly.
@@ -422,11 +441,11 @@ class _AwggMatrix(object):
     def __init__(self, wpoints, gsphere, wggmat, inord="C"):
         """"
         Args:
-            gsphere: :class:`GSphere` with G-vectors and k-point object.
+            gsphere: |GSphere| with G-vectors and k-point object.
             wpoints: Complex frequency points in Hartree.
             wggmat: [nw, ng, ng] complex array.
-            inord: storage order of `wggmat`. If inord == "F", `wggmat` is in
-                in Fortran column-major order. Default: "C" i.e. C row-major order
+            inord: storage order of ``wggmat``. If inord == "F", ``wggmat`` is in
+                in Fortran column-major order. Default: "C" i.e. C row-major order.
         """
         self.wpoints = np.array(wpoints, dtype=np.complex)
         self.gsphere = gsphere
@@ -491,7 +510,7 @@ class _AwggMatrix(object):
 
     @property
     def kpoint(self):
-        """:class:`Kpoint` object."""
+        """|Kpoint| object."""
         return self.gsphere.kpoint
 
     @property
@@ -534,7 +553,7 @@ class _AwggMatrix(object):
 
     def windex(self, w, atol=0.001):
         """
-        Find the index of the **closest** frequency in `wpoints`.
+        Find the index of the **closest** frequency in ``wpoints``.
         """
         if np.iscomplex(w):
             iw = bs_index(self.imag_wpoints.imag, w.imag, atol=atol)
@@ -546,8 +565,9 @@ class _AwggMatrix(object):
 
     def gindex(self, gvec):
         """
-        Find the index of gvec. If `gvec` is an integer, gvec is returned.
-        Raises `ValueError` if gvec is not found.
+        Find the index of gvec. If ``gvec`` is an integer, gvec is returned.
+        Raises:
+            `ValueError` if gvec is not found.
         """
         if duck.is_intlike(gvec): return int(gvec)
         return self.gsphere.index(gvec)
@@ -557,28 +577,28 @@ class _AwggMatrix(object):
         return _latex_symbol_cplxmode(self.latex_name, cplx_mode)
 
     @add_fig_kwargs
-    def plot_freq(self, gvec1, gvec2=None, waxis="real", cplx_mode="re-im", ax=None, **kwargs):
-        """
-        Plot the frequency dependence of W_{G1, G2}(omega)
+    def plot_freq(self, gvec1, gvec2=None, waxis="real", cplx_mode="re-im", ax=None, fontsize=12, **kwargs):
+        r"""
+        Plot the frequency dependence of :math:`W_{G1, G2}(\omega)`
 
         Args:
             gvec1, gvec2:
-            waxis: "real" to plot along the real axis, "imag" for the imaginary axis.
+            waxis: ``real`` to plot along the real axis, ``imag`` for the imaginary axis.
             cplx_mode: string defining the data to print.
-                Possible choices are (case-insensitive): `re` for the real part
-                "im" for the imaginary part, "abs" for the absolute value.
-                "angle" will display the phase of the complex number in radians.
-                Options can be concatenated with "-" e.g. "re-im"
-            ax: matplotlib :class:`Axes` or None if a new figure should be created.
+                Possible choices are (case-insensitive): ``re`` for the real part
+                ``im`` for the imaginary part, ``abs`` for the absolute value.
+                ``angle`` will display the phase of the complex number in radians.
+                Options can be concatenated with ``-`` e.g. ``re-im``.
+            ax: |matplotlib-Axes| or None if a new figure should be created.
+            fontsize: legend and label fontsize.
 
-        Returns:
-            matplotlib figure.
+        Returns: |matplotlib-Figure|
         """
         # Select data to plot
         ig1 = self.gindex(gvec1)
         ig2 = ig1 if gvec2 is None else self.gindex(gvec2)
 
-        ax, fig, plt = get_ax_fig_plt(ax)
+        ax, fig, plt = get_ax_fig_plt(ax=ax)
         if waxis == "real":
             if self.nrew == 0: return fig
             xx = self.real_wpoints.real * pmgu.Ha_to_eV
@@ -604,28 +624,27 @@ class _AwggMatrix(object):
 
         ax.grid(True)
         ax.set_xlabel(r"$\omega$ [eV]")
-        ax.set_title("%s, kpoint: %s" % (self.netcdf_name, self.kpoint))
-        ax.legend(loc="best")
+        ax.set_title("%s, kpoint: %s" % (self.netcdf_name, self.kpoint), fontsize=fontsize)
+        ax.legend(loc="best", fontsize=fontsize, shadow=True)
 
         return fig
 
     @add_fig_kwargs
     def plot_gg(self, cplx_mode="abs", wpos=None, **kwargs):
-        """
-        Use matplotlib imshow to plot W_{GG'} matrix
+        r"""
+        Use matplotlib imshow to plot :math:`W_{GG'}` matrix
 
         Args:
             cplx_mode: string defining the data to print.
-                Possible choices are (case-insensitive): `re` for the real part
-                "im" for the imaginary part, "abs" for the absolute value.
-                "angle" will display the phase of the complex number in radians.
+                Possible choices are (case-insensitive): ``re`` for the real part
+                ``im`` for the imaginary part, ``abs`` for the absolute value.
+                ``angle`` will display the phase of the complex number in radians.
             wpos: List of frequency indices to plot. If None, the first frequency is used (usually w=0).
                 If wpos == "all" all frequencies are shown (use it carefully)
                 Other possible values: "real" if only real frequencies are wanted.
                 "imag" for imaginary frequencies only.
 
-        Returns:
-            `matplotlib` figure.
+        Returns: |matplotlib-Figure|
         """
         # Get wpos indices.
         choice_wpos = {None: [0], "all": range(self.nw),
@@ -648,16 +667,28 @@ class _AwggMatrix(object):
 
 
 class Polarizability(_AwggMatrix):
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: Polarizability
+    """
     netcdf_name = "polarizability"
     latex_name = r"\tilde chi"
 
 
 class DielectricFunction(_AwggMatrix):
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: DielectricFunction
+    """
     netcdf_name = "dielectric_function"
     latex_name = r"\epsilon"
 
 
 class InverseDielectricFunction(_AwggMatrix):
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: InverseDielectricFunction
+    """
     netcdf_name = "inverse_dielectric_function"
     latex_name = r"\epsilon^{-1}"
 

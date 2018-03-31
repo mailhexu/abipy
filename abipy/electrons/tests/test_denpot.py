@@ -19,6 +19,7 @@ class DensityNcFileTest(AbipyTest):
             assert denc.structure.formula == "Si2"
             assert denc.ebands.structure == denc.structure
             assert str(denc.xc) == "LDA_XC_TETER93"
+            assert denc.params["nsppol"] == 1
 
             # Kpoint sampling
             # kptopt1 1 ngkpt1 8 8 8 nshiftk1 1 shiftk1   0 0 0
@@ -57,7 +58,7 @@ class DensityNcFileTest(AbipyTest):
         """Testing ni_666k_DEN.nc"""
         with abilab.abiopen(abidata.ref_file("ni_666k_DEN.nc")) as denc:
             repr(denc); str(denc)
-            assert denc.to_string(verbose=1)
+            assert denc.to_string(verbose=2)
             assert denc.structure.formula == "Ni1"
             assert denc.ebands.structure == denc.structure
             assert str(denc.xc) == "PBE"

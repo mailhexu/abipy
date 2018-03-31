@@ -1,20 +1,23 @@
 # coding: utf-8
-"""GSR file."""
+"""GSR.nc_ file."""
 from __future__ import print_function, division, unicode_literals, absolute_import
 
 import numpy as np
+import pandas as pd
 import pymatgen.core.units as units
 
 from collections import OrderedDict, Iterable, defaultdict
 from tabulate import tabulate
 from monty.string import is_string, list_strings, marquee
-from monty.collections import AttrDict
+from monty.termcolor import cprint
+from monty.collections import AttrDict, dict2namedtuple
 from monty.functools import lazy_property
 from pymatgen.core.units import EnergyArray, ArrayWithUnit
 from pymatgen.entries.computed_entries import ComputedEntry, ComputedStructureEntry
-from abipy.core.mixins import AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter
-from prettytable import PrettyTable
-from abipy.electrons.ebands import ElectronsReader
+from abipy.core.mixins import AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter
+from abipy.tools.plotting import add_fig_kwargs, get_ax_fig_plt, get_axarray_fig_plt
+from abipy.abio.robots import Robot
+from abipy.electrons.ebands import ElectronsReader, RobotWithEbands
 
 import logging
 logger = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ __all__ = [
 ]
 
 
-class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
+class GsrFile(AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter):
     """
     File containing the results of a ground-state calculation.
 
@@ -36,10 +39,13 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         with GsrFile("foo_GSR.nc") as gsr:
             print("energy: ", gsr.energy)
             gsr.ebands.plot()
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: GsrFile
     """
     @classmethod
     def from_file(cls, filepath):
-        """Initialize the object from a Netcdf file"""
+        """Initialize the object from a netcdf_ file."""
         return cls(filepath)
 
     def __init__(self, filepath):
@@ -65,34 +71,33 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         app(marquee("File Info", mark="="))
         app(self.filestat(as_string=True))
         app("")
-        app(marquee("Structure", mark="="))
-        app(str(self.structure))
+        app(self.structure.to_string(verbose=verbose, title="Structure"))
         if self.is_scf_run:
             app("")
             app("Stress tensor (Cartesian coordinates in Ha/Bohr**3):\n%s" % self.cart_stress_tensor)
             app("Pressure: %.3f [GPa]" % self.pressure)
+            app("Energy: %.8f [eV]" % self.energy)
         app("")
-        app(self.ebands.to_string(with_structure=False, title="Electronic Bands"))
+        app(self.ebands.to_string(with_structure=False, verbose=verbose, title="Electronic Bands"))
+
+        if verbose > 1:
+            app("")
+            app(self.hdr.to_string(verbose=verbose, title="Abinit Header"))
 
         return "\n".join(lines)
 
     @property
     def ebands(self):
-        """:class:`ElectronBands` object."""
+        """|ElectronBands| object."""
         return self._ebands
 
-    @property
+    @lazy_property
     def is_scf_run(self):
         """True if the GSR has been produced by a SCF run."""
         # NOTE: We use kptopt to understand if we have a SCF/NSCF run
         # In principle one should use iscf but it's not available in the GSR.
-        #return self.ebands.kpoints.ksampling.kptopt >= 0
-        return abs(self.cart_stress_tensor[0,0] - 9.9999999999e+99) > 0.1
-
-    #FIXME
-    @property
-    def tsmear(self):
-        return self.ebands.smearing.tsmear_ev.to("Ha")
+        #return int(self.reader.read_value("kptopt")) >= 0
+        return abs(self.cart_stress_tensor[0, 0] - 9.9999999999e+99) > 0.1
 
     @lazy_property
     def ecut(self):
@@ -106,29 +111,25 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
 
     @property
     def structure(self):
-        """:class:`Structure` object."""
+        """|Structure| object."""
         return self.ebands.structure
 
     @lazy_property
     def energy(self):
-        """Total energy"""
+        """Total energy in eV."""
         return units.Energy(self.reader.read_value("etotal"), "Ha").to("eV")
 
     @lazy_property
     def energy_per_atom(self):
-        """Total energy / number_of_atoms"""
+        """Total energy / number_of_atoms (eV units)"""
         return self.energy / len(self.structure)
-
-    @lazy_property
-    def energy_terms(self):
-        return self.reader.read_energy_terms()
 
     @lazy_property
     def cart_forces(self):
         """Cartesian forces in eV / Ang"""
         return self.reader.read_cart_forces()
 
-    @property
+    @lazy_property
     def max_force(self):
         fmods = np.sqrt([np.dot(force, force) for force in self.cart_forces])
         return fmods.max()
@@ -173,8 +174,25 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
 
     @lazy_property
     def xc(self):
-        """:class:`XcFunc object with info on the exchange-correlation functional."""
+        """
+        :class:`XcFunc` object with info on the exchange-correlation functional.
+        Use libxc convention :cite:`Marques2012`.
+        """
         return self.reader.read_abinit_xcfunc()
+
+    @lazy_property
+    def energy_terms(self):
+        """:class:`EnergyTerms` with the different contributions to the total energy in eV."""
+        return self.reader.read_energy_terms(unit="eV")
+
+    @lazy_property
+    def params(self):
+        """:class:`OrderedDict` with parameters that might be subject to convergence studies."""
+        od = self.get_ebands_params()
+        od["ecut"] = float(self.ecut)
+        #if self.usepaw == 1
+        #    od["pawecutdg"] = float(self.pawecutdg)
+        return od
 
     def close(self):
         self.reader.close()
@@ -195,7 +213,6 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
                 supported by the GSR object.
 
         Returns:
-
             ComputedStructureEntry/ComputedEntry
         """
         # TODO
@@ -234,9 +251,16 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
             #optical_gap:
             #efermi:
 
+    def yield_figs(self, **kwargs):  # pragma: no cover
+        """
+        This function *generates* a predefined list of matplotlib figures with minimal input from the user.
+        """
+        for fig in self.yield_structure_figs(**kwargs): yield fig
+        for fig in self.yield_ebands_figs(**kwargs): yield fig
+
     def write_notebook(self, nbpath=None):
         """
-        Write an ipython notebook to nbpath. If nbpath is None, a temporay file in the current
+        Write a jupyter_ notebook to ``nbpath``. If nbpath is None, a temporay file in the current
         working directory is created. Return path to the notebook.
         """
         nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)
@@ -244,20 +268,22 @@ class GsrFile(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
         nb.cells.extend([
             nbv.new_code_cell("gsr = abilab.abiopen('%s')" % self.filepath),
             nbv.new_code_cell("print(gsr)"),
-            nbv.new_code_cell("fig = gsr.ebands.plot()"),
-            nbv.new_code_cell("fig = gsr.ebands.kpoints.plot()"),
+            nbv.new_code_cell("gsr.ebands.plot();"),
+            nbv.new_code_cell("gsr.ebands.kpoints.plot();"),
+            nbv.new_code_cell("# gsr.ebands.plot_transitions(omega_ev=3.0, qpt=(0, 0, 0), atol_ev=0.1);"),
             nbv.new_code_cell("""\
 if gsr.ebands.kpoints.is_ibz:
-    fig = gsr.ebands.get_edos().plot()"""),
+    gsr.ebands.get_edos().plot();"""),
             #nbv.new_code_cell("emass = gsr.ebands.effective_masses(spin=0, band=0, acc=4)"),
-
         ])
 
         return self._write_nb_nbpath(nb, nbpath)
 
 
 class EnergyTerms(AttrDict):
-    """Contributions to the total GS energy. See energies_type in m_energies.F90"""
+    """
+    Contributions to the total GS energy. See energies_type in m_energies.F90.
+    """
 
     _NAME2DOC = OrderedDict([
         # (Name, help)
@@ -299,17 +325,10 @@ class EnergyTerms(AttrDict):
 
     def __str__(self):
         return self.to_string(with_doc=False)
+
     __repr__ = __str__
 
-    @property
-    def table(self):
-        """PrettyTable object with the results."""
-        table = PrettyTable(["Term", "Value"])
-        for k, doc in self._NAME2DOC.items():
-            table.add_row([k, self[k]])
-        return table
-
-    def to_string(self, with_doc=True):
+    def to_string(self, verbose=0, with_doc=True):
         """String representation, with documentation if with_doc."""
         lines = [str(self.table)]
         if with_doc:
@@ -318,15 +337,35 @@ class EnergyTerms(AttrDict):
 
         return "\n".join(lines)
 
+    @property
+    def table(self):
+        """PrettyTable object with the results."""
+        from prettytable import PrettyTable
+        table = PrettyTable(["Term", "Value"])
+        for k, doc in self._NAME2DOC.items():
+            table.add_row([k, self[k]])
+        return table
+
+    #def get_dataframe(self):
+    #    """
+    #    Return a |pandas-DataFrame|
+    #    """
+    #    d = {k: float(self[k]) for k in self}
+    #    return pd.DataFrame(d, index=[None], columns=list(d.keys()))
+    #    #return pd.DataFrame(d, columns=list(d.keys()))
+
 
 class GsrReader(ElectronsReader):
     """
     This object reads the results stored in the _GSR (Ground-State Results) file produced by ABINIT.
     It provides helper function to access the most important quantities.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: GsrReader
     """
     def read_cart_forces(self, unit="eV ang^-1"):
         """
-        Read and return a numpy array with the cartesian forces in unit `unit`.
+        Read and return a |numpy-array| with the cartesian forces in unit ``unit``.
         Shape (natom, 3)
         """
         return ArrayWithUnit(self.read_value("cartesian_forces"), "Ha bohr^-1").to(unit)
@@ -338,18 +377,259 @@ class GsrReader(ElectronsReader):
         # Abinit stores 6 unique components of this symmetric 3x3 tensor:
         # Given in order (1,1), (2,2), (3,3), (3,2), (3,1), (2,1).
         c = self.read_value("cartesian_stress_tensor")
-        tensor = np.empty((3,3), dtype=np.float)
-        for i in range(3): tensor[i,i] = c[i]
-        for p, (i, j) in enumerate(((2,1), (2,0), (1,0))):
-            tensor[i,j] = c[3+p]
-            tensor[j,i] = c[3+p]
+        tensor = np.empty((3, 3), dtype=np.float)
+        for i in range(3): tensor[i, i] = c[i]
+        for p, (i, j) in enumerate(((2, 1), (2, 0), (1, 0))):
+            tensor[i, j] = c[3 + p]
+            tensor[j, i] = c[3 + p]
 
         return tensor
 
     def read_energy_terms(self, unit="eV"):
         """
-        Return a dictionary of `Energies` with the different contributions to the total electronic energy.
+        Return a dictionary with the different contributions to the total electronic energy.
         """
         convert = lambda e: units.Energy(e, unit="Ha").to(unit)
         d = {k: convert(self.read_value(k)) for k in EnergyTerms.ALL_KEYS}
         return EnergyTerms(**d)
+
+
+class GsrRobot(Robot, RobotWithEbands):
+    """
+    This robot analyzes the results contained in multiple GSR.nc_ files.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: GsrRobot
+    """
+    EXT = "GSR"
+
+    def get_dataframe(self, with_geo=True, abspath=False, funcs=None, **kwargs):
+        """
+        Return a |pandas-DataFrame| with the most important GS results.
+        and the filenames as index.
+
+        Args:
+            with_geo: True if structure info should be added to the dataframe
+            abspath: True if paths in index should be absolute. Default: Relative to getcwd().
+
+        kwargs:
+            attrs:
+                List of additional attributes of the |GsrFile| to add to the DataFrame.
+            funcs: Function or list of functions to execute to add more data to the DataFrame.
+                Each function receives a |GsrFile| object and returns a tuple (key, value)
+                where key is a string with the name of column and value is the value to be inserted.
+        """
+        # Add attributes specified by the users
+        # TODO add more columns
+        attrs = [
+            "energy", "pressure", "max_force",
+            "ecut", "pawecutdg",
+            "tsmear", "nkpt",
+            "nsppol", "nspinor", "nspden",
+        ] + kwargs.pop("attrs", [])
+
+        rows, row_names = [], []
+        for label, gsr in self.items():
+            row_names.append(label)
+            d = OrderedDict()
+
+            # Add info on structure.
+            if with_geo:
+                d.update(gsr.structure.get_dict4pandas(with_spglib=True))
+
+            for aname in attrs:
+                if aname == "nkpt":
+                    value = len(gsr.ebands.kpoints)
+                else:
+                    value = getattr(gsr, aname, None)
+                    if value is None: value = getattr(gsr.ebands, aname, None)
+                d[aname] = value
+
+            # Execute functions
+            if funcs is not None: d.update(self._exec_funcs(funcs, gsr))
+            rows.append(d)
+
+        row_names = row_names if not abspath else self._to_relpaths(row_names)
+        return pd.DataFrame(rows, index=row_names, columns=list(rows[0].keys()))
+
+    def get_eos_fits_dataframe(self, eos_names="murnaghan"):
+        """
+        Fit energy as function of volume to get the equation of state,
+        equilibrium volume, bulk modulus and its derivative wrt to pressure.
+
+        Args:
+            eos_names: String or list of strings with EOS names.
+                For the list of available models, see pymatgen.analysis.eos.
+
+        Return:
+            (fits, dataframe) namedtuple.
+                fits is a list of ``EOSFit object``
+                dataframe is a |pandas-DataFrame| with the final results.
+        """
+        # Read volumes and energies from the GSR files.
+        energies, volumes = [], []
+        for label, gsr in self.items():
+            energies.append(float(gsr.energy))
+            volumes.append(float(gsr.structure.volume))
+
+        # Order data by volumes if needed.
+        if np.any(np.diff(volumes) < 0):
+            ves = sorted(zip(volumes, energies), key=lambda t: t[0])
+            volumes = [t[0] for t in ves]
+            energies = [t[1] for t in ves]
+
+        # Note that eos.fit expects lengths in Angstrom, and energies in eV.
+        # I'm also monkey-patching the plot method.
+        from pymatgen.analysis.eos import EOS
+        if eos_names == "all":
+            # Use all the available models.
+            eos_names = [n for n in EOS.MODELS if n not in ("deltafactor", "numerical_eos")]
+        else:
+            eos_names = list_strings(eos_names)
+
+        fits, index, rows = [], [], []
+        for eos_name in eos_names:
+            try:
+                fit = EOS(eos_name=eos_name).fit(volumes, energies)
+            except Exception as exc:
+                cprint("EOS %s raised exception:\n%s" % (eos_name, str(exc)))
+                continue
+
+            # Replace plot with plot_ax method
+            fit.plot = fit.plot_ax
+            fits.append(fit)
+            index.append(eos_name)
+            rows.append(OrderedDict([(aname, getattr(fit, aname)) for aname in
+                ("v0", "e0", "b0_GPa", "b1")]))
+
+        dataframe = pd.DataFrame(rows, index=index, columns=list(rows[0].keys()) if rows else None)
+        return dict2namedtuple(fits=fits, dataframe=dataframe)
+
+    def get_energyterms_dataframe(self, iref=None):
+        """
+        Build and return with the different contributions to the total energy in eV
+
+        Args:
+            iref: Index of the abifile used as reference: the energies of the
+            ``iref`` gsrfile will be subtracted from the other rows. Ignored if None.
+
+        Return: |pandas-Dataframe|
+        """
+        rows, row_names = [], []
+        for label, gsr in self.items():
+            row_names.append(label)
+            # Add total energy.
+            d = OrderedDict([("energy", gsr.energy)])
+            d.update(gsr.energy_terms)
+            d.update(gsr.params)
+            rows.append(d)
+
+        df = pd.DataFrame(rows, index=row_names, columns=list(rows[0].keys()))
+        if iref is not None:
+            # Subtract iref row from the rest of the rows.
+            iref_row = df.iloc[[iref]].values[0]
+            df = df.apply(lambda row: row - iref_row, axis=1)
+
+        return df
+
+    @add_fig_kwargs
+    def gridplot_eos(self, eos_names="all", fontsize=6, **kwargs):
+        """
+        Plot multiple EOS on a grid with captions showing the final results.
+
+        Args:
+            eos_names: String or list of strings with EOS names. See pymatgen.analysis.EOS
+            fontsize: Fontsize used for caption text.
+
+        Returns: |matplotlib-Figure|
+        """
+        r = self.get_eos_fits_dataframe(eos_names=eos_names)
+
+        num_plots, ncols, nrows = len(r.fits), 1, 1
+        if num_plots > 1:
+            ncols = 2
+            nrows = (num_plots // ncols) + (num_plots % ncols)
+
+        # Build grid of plots.
+        ax_list, fig, plt = get_axarray_fig_plt(None, nrows=nrows, ncols=ncols,
+                                                sharex=False, sharey=False, squeeze=False)
+        ax_list = ax_list.ravel()
+
+        for i, (fit, ax) in enumerate(zip(r.fits, ax_list)):
+            fit.plot_ax(ax=ax, fontsize=fontsize, label="", show=False)
+
+        # Get around a bug in matplotlib
+        if num_plots % ncols != 0:
+            ax_list[-1].axis('off')
+
+        return fig
+
+    @add_fig_kwargs
+    def plot_gsr_convergence(self, sortby=None, hue=None, fontsize=6,
+                             items=("energy", "pressure", "max_force"), **kwargs):
+        """
+        Plot the convergence of the most important quantities available in the GSR file
+        wrt to the ``sortby`` parameter. Values can optionally be grouped by ``hue``.
+
+        Args:
+            sortby: Define the convergence parameter, sort files and produce plot labels.
+                Can be None, string or function. If None, no sorting is performed.
+                If string and not empty it's assumed that the abifile has an attribute
+                with the same name and `getattr` is invoked.
+                If callable, the output of sortby(abifile) is used.
+            hue: Variable that define subsets of the data, which will be drawn on separate lines.
+                Accepts callable or string
+                If string, it's assumed that the abifile has an attribute with the same name and getattr is invoked.
+                If callable, the output of hue(abifile) is used.
+            items: List of GSR attributes (or callables) to be analyzed.
+            fontsize: legend and label fontsize.
+
+        Returns: |matplotlib-Figure|
+
+        Example:
+
+             robot.plot_gsr_convergence(sortby="nkpt", hue="tsmear")
+        """
+        return self.plot_convergence_items(items, sortby=sortby, hue=hue, fontsize=fontsize, show=False, **kwargs)
+
+    #def get_phasediagram_results(self):
+    #    from abipy.core.restapi import PhaseDiagramResults
+    #    entries = []
+    #    for label, gsr in self.items():
+    #        entries.append(gsr.get_computed_entry(inc_structure=True, parameters=None, data=None))
+    #    return PhaseDiagramResults(entries)
+
+    def yield_figs(self, **kwargs):  # pragma: no cover
+        """
+        This function *generates* a predefined list of matplotlib figures with minimal input from the user.
+        Used in abiview.py to get a quick look at the results.
+        """
+        yield self.plot_lattice_convergence(show=False)
+        yield self.plot_gsr_convergence(show=False)
+        #for fig in self.get_ebands_plotter.yield_figs(): yield fig
+
+    def write_notebook(self, nbpath=None):
+        """
+        Write a jupyter_ notebook to ``nbpath``. If nbpath is None, a temporay file in the current
+        working directory is created. Return path to the notebook.
+        """
+        nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)
+
+        args = [(l, f.filepath) for l, f in self.items()]
+        nb.cells.extend([
+            #nbv.new_markdown_cell("# This is a markdown cell"),
+            nbv.new_code_cell("robot = abilab.GsrRobot(*%s)\nrobot.trim_paths()\nrobot" % str(args)),
+            nbv.new_code_cell("ebands_plotter = robot.get_ebands_plotter()"),
+            nbv.new_code_cell("df = ebands_plotter.get_ebands_frame()\ndisplay(df)"),
+            nbv.new_code_cell("ebands_plotter.ipw_select_plot()"),
+            nbv.new_code_cell("#anim = ebands_plotter.animate();"),
+            nbv.new_code_cell("edos_plotter = robot.get_edos_plotter()"),
+            nbv.new_code_cell("edos_plotter.ipw_select_plot()"),
+            nbv.new_code_cell("#robot.gridplot_eos();"),
+        ])
+
+        # Mixins
+        nb.cells.extend(self.get_baserobot_code_cells())
+        nb.cells.extend(self.get_ebands_code_cells())
+
+        return self._write_nb_nbpath(nb, nbpath)

@@ -2,20 +2,19 @@
 """Density/potential files in netcdf/fortran format."""
 from __future__ import print_function, division, unicode_literals, absolute_import
 
+import os
+import tempfile
 import numpy as np
 
 from monty.string import marquee
 from monty.termcolor import cprint
 from monty.functools import lazy_property
-from abipy.core.mixins import (AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter,
+from abipy.core.mixins import (AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter,
     AbinitFortranFile, CubeFile)
+from abipy.flowtk import Cut3D
 from abipy.core.fields import FieldReader
+from abipy.abio.inputs import Cut3DInput
 from abipy.electrons.ebands import ElectronsReader
-#from abipy.tools import duck
-#from abipy.tools.plotting import add_fig_kwargs, get_ax_fig_plt, set_axlims
-
-import logging
-logger = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -27,15 +26,45 @@ __all__ = [
 ]
 
 
+class Cut3dDenPotNcFile(AbinitNcFile, Has_Structure):
+    """
+    Netcdf file with structure and density/potential produced by CUT3d
+    Unlike _NcFileWithField subclasses, this object does not contain an electronic band-structure
+    and it's mainly used to convert from Fortran DEN/POT to netcdf.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: Cut3dDenPotNcFile
+    """
+    def __init__(self, filepath):
+        super(Cut3dDenPotNcFile, self).__init__(filepath)
+        self.reader = FieldReader(filepath)
+        self.field = self.reader.read_field()
+
+    @property
+    def structure(self):
+        """|Structure| object."""
+        return self.field.structure
+
+    def close(self):
+        """Close the file."""
+        self.reader.close()
+
+    @lazy_property
+    def params(self):
+        """:class:`OrderedDict` with parameters that might be subject to convergence studies."""
+        return {}
+
+
+
 class _DenPotNcReader(ElectronsReader, FieldReader):
     """Object used to read data from density/potential files in netcdf format."""
 
 
-class _NcFileWithField(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookWriter):
+class _NcFileWithField(AbinitNcFile, Has_Header, Has_Structure, Has_ElectronBands, NotebookWriter):
     """
     Base class providing commong methods for netcdf files with density/potential
     """
-    _field_name = None
+    field_name = None
 
     @classmethod
     def from_file(cls, filepath):
@@ -48,12 +77,12 @@ class _NcFileWithField(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookW
 
     @lazy_property
     def ebands(self):
-        """:class:`ElectronBands` object."""
+        """|ElectronBands| object."""
         return self.reader.read_ebands()
 
     @property
     def structure(self):
-        """:class:`Structure` object."""
+        """|Structure| object."""
         return self.ebands.structure
 
     @lazy_property
@@ -62,15 +91,22 @@ class _NcFileWithField(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookW
         return self.reader.read_abinit_xcfunc()
 
     @lazy_property
-    def _field(self):
+    def params(self):
+        """:class:`OrderedDict` with parameters that might be subject to convergence studies."""
+        od = self.get_ebands_params()
+        return od
+
+    @lazy_property
+    def field(self):
         """
         The field object provided by the subclass.
-        Methods of this base class should use self._field to implement
+        Methods of this base class should use self.field to implement
         logic common to the sub-classes.
         """
-        return getattr(self, self.__class__._field_name)
+        return getattr(self, self.__class__.field_name)
 
     def close(self):
+        """Close the file."""
         self.reader.close()
 
     def __str__(self):
@@ -84,21 +120,24 @@ class _NcFileWithField(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookW
         app(marquee("File Info", mark="="))
         app(self.filestat(as_string=True))
         app("")
-        app(marquee("Structure", mark="="))
-        app(str(self.structure))
+        app(self.structure.to_string(verbose=verbose, title="Structure"))
         app("")
         app(self.ebands.to_string(with_structure=False, title="Electronic Bands"))
         app("XC functional: %s" % str(self.xc))
 
         # Add info on the field
-        app(marquee(self._field.__class__.__name__, mark="="))
-        app(str(self._field))
+        app(marquee(self.field.__class__.__name__, mark="="))
+        app(str(self.field))
+
+        if verbose > 1:
+            app("")
+            app(self.hdr.to_string(verbose=verbose, title="Abinit Header"))
 
         return "\n".join(lines)
 
     def write_notebook(self, nbpath=None):
         """
-        Write an ipython notebook to nbpath. If nbpath is None, a temporay file in the current
+        Write a jupyter_ notebook to ``nbpath``. If nbpath is None, a temporay file in the current
         working directory is created. Return path to the notebook.
         """
         nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)
@@ -106,9 +145,9 @@ class _NcFileWithField(AbinitNcFile, Has_Structure, Has_ElectronBands, NotebookW
         nb.cells.extend([
             nbv.new_code_cell("ncfile = abilab.abiopen('%s')" % self.filepath),
             nbv.new_code_cell("print(ncfile)"),
-            nbv.new_code_cell("fig = ncfile.ebands.kpoints.plot()"),
-            nbv.new_code_cell("fig = ncfile.ebands.plot()"),
-            nbv.new_code_cell("fig = ncfile.ebands.get_edos().plot()"),
+            nbv.new_code_cell("ncfile.ebands.kpoints.plot();"),
+            nbv.new_code_cell("ncfile.ebands.plot();"),
+            nbv.new_code_cell("ncfile.ebands.get_edos().plot();"),
             nbv.new_code_cell("#cube = ncfile.write_cube(filename=None)"),
             nbv.new_code_cell("#xsf_path = ncfile.write_xsf(filename=None"),
             nbv.new_code_cell("#chgcar = ncfile.write_chgcar(filename=None"),
@@ -128,14 +167,19 @@ class DensityNcFile(_NcFileWithField):
         with DensityNcFile("foo_DEN.nc") as ncfile:
             ncfile.density
             ncfile.ebands.plot()
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: DensityNcFile
     """
-    _field_name = "density"
+    field_name = "density"
 
     @lazy_property
     def density(self):
+        """Density object."""
         return self.reader.read_density()
 
     def to_string(self, verbose=0):
+        """String representation."""
         s = super(DensityNcFile, self).to_string(verbose=verbose)
 
         # Add density related stuff.
@@ -160,7 +204,7 @@ class DensityNcFile(_NcFileWithField):
 
     def write_xsf(self, filename=None):
         """
-        Write density in XSF format.
+        Write density in XSF format (xcrysden_)
         """
         if filename is None:
             filename = self.basename.replace(".nc", ".xsf")
@@ -169,6 +213,7 @@ class DensityNcFile(_NcFileWithField):
         return self.density.export(filename)
 
     def write_cube(self, filename=None, spin="total"):
+        """Write density in CUBE format."""
         if filename is None:
             filename = self.basename.replace(".nc", ".cube")
             cprint("Writing density in CUBE format to file: %s" % filename, "yellow")
@@ -177,7 +222,11 @@ class DensityNcFile(_NcFileWithField):
 
 
 class VhartreeNcFile(_NcFileWithField):
-    _field_name = "vh"
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: VhartreeNcFile
+    """
+    field_name = "vh"
 
     @lazy_property
     def vh(self):
@@ -186,7 +235,11 @@ class VhartreeNcFile(_NcFileWithField):
 
 
 class VxcNcFile(_NcFileWithField):
-    _field_name = "vxc"
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: VxcNcFile
+    """
+    field_name = "vxc"
 
     @lazy_property
     def vxc(self):
@@ -195,7 +248,11 @@ class VxcNcFile(_NcFileWithField):
 
 
 class VhxcNcFile(_NcFileWithField):
-    _field_name = "vhxc"
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: VhxcNcFile
+    """
+    field_name = "vhxc"
 
     @lazy_property
     def vhxc(self):
@@ -204,7 +261,11 @@ class VhxcNcFile(_NcFileWithField):
 
 
 class PotNcFile(_NcFileWithField):
-    _field_name = "vks"
+    """
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: PotNcFile
+    """
+    field_name = "vks"
 
     @lazy_property
     def vks(self):
@@ -216,16 +277,16 @@ class DensityFortranFile(AbinitFortranFile):
     """
     Class representing the _DEN fortran file containing density.
     Provides methods to run Cut3D and convert data into different formats.
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: DensityFortranFile
     """
 
     def _convert(self, cut3d_input, workdir=None):
         """
         Internal function to run a conversion using cut3d.
         """
-        workdir = tempfile.mkdtemp() if workdir is None else workdir
-
-        # local import to avoid circular references
-        from abipy.flowtk import Cut3D
+        workdir = os.path.abspath(tempfile.mkdtemp() if workdir is None else workdir)
         outfile, converted_file = Cut3D().cut3d(cut3d_input, workdir)
 
         return converted_file
@@ -236,14 +297,12 @@ class DensityFortranFile(AbinitFortranFile):
 
         Args:
             out_filepath: path to the file that should be produced by cut3D, if required. At this stage it would be
-                safer to use just the file name, as using an absolute or relative path may fail depending on
-                the compiler.
+                safer to use just the file name, as using an absolute or relative path may fail depending on the compiler.
             workdir: directory where cut3d is executed.
 
         Returns:
             (CubeFile) the converted file as a CubeFile object.
         """
-        from abipy.abio.inputs import Cut3DInput
         return CubeFile(self._convert(cut3d_input=Cut3DInput.den_to_cube(self.filepath, out_filepath),
                                       workdir=workdir))
 
@@ -261,9 +320,8 @@ class DensityFortranFile(AbinitFortranFile):
         Returns:
             (string) path to the converted file.
         """
-        from abipy.abio.inputs import Cut3DInput
-        return self._convert(cut3d_input=Cut3DInput.den_to_xsf(self.filepath, output_filepath=out_filepath, shift=shift),
-                             workdir=workdir)
+        return self._convert(cut3d_input=Cut3DInput.den_to_xsf(self.filepath,
+                             output_filepath=out_filepath, shift=shift), workdir=workdir)
 
     def get_tecplot(self, out_filepath, workdir=None):
         """
@@ -278,8 +336,8 @@ class DensityFortranFile(AbinitFortranFile):
         Returns:
             (string) path to the converted file.
         """
-        from abipy.abio.inputs import Cut3DInput
-        return self._convert(cut3d_input=Cut3DInput.den_to_tecplot(self.filepath, out_filepath), workdir=workdir)
+        return self._convert(cut3d_input=Cut3DInput.den_to_tecplot(self.filepath, out_filepath),
+                             workdir=workdir)
 
     def get_molekel(self, out_filepath, workdir=None):
         """
@@ -294,8 +352,8 @@ class DensityFortranFile(AbinitFortranFile):
         Returns:
             (string) path to the converted file.
         """
-        from abipy.abio.inputs import Cut3DInput
-        return self._convert(cut3d_input=Cut3DInput.den_to_molekel(self.filepath, out_filepath), workdir=workdir)
+        return self._convert(cut3d_input=Cut3DInput.den_to_molekel(self.filepath, out_filepath),
+                             workdir=workdir)
 
     def get_3d_indexed(self, out_filepath, workdir=None):
         """
@@ -310,8 +368,8 @@ class DensityFortranFile(AbinitFortranFile):
         Returns:
             (string) path to the converted file.
         """
-        from abipy.abio.inputs import Cut3DInput
-        return self._convert(cut3d_input=Cut3DInput.den_to_3d_indexed(self.filepath, out_filepath), workdir=workdir)
+        return self._convert(cut3d_input=Cut3DInput.den_to_3d_indexed(self.filepath, out_filepath),
+                             workdir=workdir)
 
     def get_3d_formatted(self, out_filepath, workdir=None):
         """
@@ -326,8 +384,8 @@ class DensityFortranFile(AbinitFortranFile):
         Returns:
             (string) path to the converted file.
         """
-        from abipy.abio.inputs import Cut3DInput
-        return self._convert(cut3d_input=Cut3DInput.den_to_3d_indexed(self.filepath, out_filepath), workdir=workdir)
+        return self._convert(cut3d_input=Cut3DInput.den_to_3d_indexed(self.filepath, out_filepath),
+                             workdir=workdir)
 
     def get_hirshfeld(self, structure, all_el_dens_paths=None, fhi_all_el_path=None, workdir=None):
         """
@@ -350,19 +408,33 @@ class DensityFortranFile(AbinitFortranFile):
         if all_el_dens_paths is not None and fhi_all_el_path is not None:
             raise ValueError("all_el_dens_paths and fhi_all_el_path are mutually exclusive.")
 
-        # local import to avoid circular references
-        from abipy.flowtk import Cut3D
-        from abipy.abio.inputs import Cut3DInput
-
         if all_el_dens_paths is not None:
             cut3d_input = Cut3DInput.hirshfeld(self.filepath, all_el_dens_paths)
         else:
             cut3d_input = Cut3DInput.hirshfeld_from_fhi_path(self.filepath, structure, fhi_all_el_path)
 
-        workdir = tempfile.mkdtemp() if workdir is None else workdir
+        workdir = os.path.abspath(tempfile.mkdtemp() if workdir is None else workdir)
 
         cut3d = Cut3D()
         outfile, converted_file = cut3d.cut3d(cut3d_input, workdir)
 
         from abipy.electrons.charges import HirshfeldCharges
         return HirshfeldCharges.from_cut3d_outfile(structure=structure, filepath=cut3d.stdout_fname)
+
+    def get_density(self, workdir=None):
+        """
+        Invoke cut3d to produce a netcdf file with the density, read the file and return Density object.
+
+        Args:
+            workdir: directory in which cut3d is executed.
+        """
+        workdir = os.path.abspath(tempfile.mkdtemp() if workdir is None else workdir)
+        output_filepath = os.path.join(workdir, "field_CUT3DDENPOT.nc")
+        # FIXME Converters with nspden > 1 won't work since cut3d asks for the ispden index.
+        cut3d_input = Cut3DInput(infile_path=self.filepath, output_filepath=output_filepath,
+                                 options=[15, output_filepath, 0, 0])
+
+        outfile, _ = Cut3D().cut3d(cut3d_input, workdir)
+        with Cut3dDenPotNcFile(output_filepath) as nc:
+            assert nc.field.is_density_like and nc.field.netcdf_name == "density"
+            return nc.field
