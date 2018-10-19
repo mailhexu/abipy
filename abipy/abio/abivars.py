@@ -3,6 +3,7 @@ from __future__ import division, print_function, unicode_literals, absolute_impo
 
 import json
 import os
+import warnings
 import numpy as np
 
 from pprint import pformat
@@ -10,11 +11,9 @@ from monty.string import is_string, boxed
 from monty.functools import lazy_property
 from monty.termcolor import cprint
 from pymatgen.core.units import bohr_to_ang
-from abipy.core.structure import Structure, frames_from_structures
+from abipy.core.structure import Structure, dataframes_from_structures
 from abipy.core.mixins import Has_Structure, TextFile, NotebookWriter
-
-import logging
-logger = logging.getLogger(__name__)
+from abipy.abio.abivar_database.variables import get_codevars
 
 __all__ = [
     "is_abivar",
@@ -23,40 +22,20 @@ __all__ = [
     "AbinitInputParser",
 ]
 
-_anaddb_varnames = None
-
-def _get_anaddb_varnames():
-    global _anaddb_varnames
-    if _anaddb_varnames is not None:
-        return _anaddb_varnames
-
-    from abipy import data as abidata
-    with open(abidata.var_file("anaddb_vars.json"), "rt") as fh:
-        _anaddb_varnames = set(json.load(fh))
-        return _anaddb_varnames
-
-
 def is_anaddb_var(varname):
     """True if varname is a valid Anaddb variable."""
-    return varname in _get_anaddb_varnames()
+    return varname in get_codevars()["anaddb"]
 
 
-ABI_VARNAMES = None
-
-def is_abivar(s):
+def is_abivar(varname):
     """True if s is an ABINIT variable."""
-    global ABI_VARNAMES
-    if ABI_VARNAMES is None:
-        from abipy import data as abidata
-        with open(abidata.var_file("abinit_vars.json"), "rt") as fh:
-            ABI_VARNAMES = set(json.load(fh))
-            # Add include statement
-            # FIXME: These variables should be added to the database.
-            ABI_VARNAMES.update(("include", "xyzfile"))
-
-    return s in ABI_VARNAMES
+    # Add include statement
+    # FIXME: These variables should be added to the database.
+    extra = ["include", "xyzfile"]
+    return varname in get_codevars()["abinit"] or varname in extra
 
 
+# TODO: Move to new directory
 ABI_OPERATORS = set(["sqrt", ])
 
 ABI_UNIT_NAMES = {
@@ -136,7 +115,7 @@ def str2array_bohr(obj):
     elif unit in ("bohr", "bohrs", "au"):
         return np.fromstring(" ".join(tokens[:-1]), sep=" ")
     else:
-        raise ValueError("Don't know how to handle unit: %s" % unit)
+        raise ValueError("Don't know how to handle unit: %s" % str(unit))
 
 
 def str2array(obj, dtype=float):
@@ -206,10 +185,7 @@ class Dataset(dict, Has_Structure):
             return Structure.from_abivars(acell=acell, znucl=znucl, typat=typat, **kwargs)
         except Exception as exc:
             print("Wrong inputs passed to Structure.from_abivars:")
-            print("  acell", acell)
-            print("  znucl", znucl)
-            print("  typat", typat)
-            print("  kwargs", kwargs)
+            print("acell:", acell, "znucl:", znucl, "typat:", typat, "kwargs:", kwargs, sep="\n")
             raise exc
 
     def get_vars(self):
@@ -221,13 +197,34 @@ class Dataset(dict, Has_Structure):
         return {k: self[k] for k in self if k not in geovars}
 
     def __str__(self):
-        """string representation."""
+        return self.to_string()
+
+    def to_string(self, post=None, mode="text", verbose=0):
+        """
+        String representation.
+
+        Args:
+            post: String that will be appended to the name of the variables
+            mode: Either `text` or `html` if HTML output with links is wanted.
+            verbose: Verbosity level.
+        """
+        post = post if post is not None else ""
+        if mode == "html":
+            from abipy.abio.abivars_db import get_abinit_variables
+            var_database = get_abinit_variables()
+
         lines = []
         app = lines.append
         for k in sorted(list(self.keys())):
-            app("%s %s" % (k, str(self[k])))
+            vname = k + post
+            if mode == "html": vname = var_database[k].html_link(label=vname)
+            app("%s %s" % (vname, str(self[k])))
 
-        return "\n".join(lines)
+        return "\n".join(lines) if mode=="text" else "\n".join(lines).replace("\n", "<br>")
+
+    def _repr_html_(self):
+        """Integration with jupyter_ notebooks."""
+        return self.to_string(mode="html")
 
 
 class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
@@ -250,16 +247,15 @@ class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
         super(AbinitInputFile, self).__init__(filepath)
 
         with open(filepath, "rt") as fh:
-            string = fh.read()
+            self.string = fh.read()
 
-        self.string = string
-        self.datasets = AbinitInputParser().parse(string)
+        self.datasets = AbinitInputParser().parse(self.string)
         self.ndtset = len(self.datasets)
 
     def __str__(self):
         return self.to_string()
 
-    def to_string(self):
+    def to_string(self, verbose=0):
         """String representation."""
         lines = []
         app = lines.append
@@ -279,7 +275,7 @@ class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
                 app(structure.spget_summary())
                 app("")
 
-            dfs = frames_from_structures(structures, index=[i+1 for i in range(self.ndtset)])
+            dfs = dataframes_from_structures(structures, index=[i+1 for i in range(self.ndtset)])
             app(boxed("Tabular view (each row corresponds to a dataset structure)"))
             app("")
             app("Lattice parameters:")
@@ -289,6 +285,17 @@ class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
             app(str(dfs.coords))
 
         return "\n".join(lines)
+
+    @lazy_property
+    def has_multi_structures(self):
+        """True if input defines multiple structures."""
+        return self.structure is None
+
+    def _repr_html_(self):
+        """Integration with jupyter notebooks."""
+        from abipy.abio.abivars_db import repr_html_from_abinit_string
+        return repr_html_from_abinit_string(self.string)
+        #return self.to_string(mode="html"))
 
     def close(self):
         """NOP, required by ABC."""
@@ -309,9 +316,24 @@ class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
         """
         for dt in self.datasets[1:]:
             if dt.structure != self.datasets[0].structure:
-                logger.info("Datasets have different structures. Returning None. Use input.datasets[i].structure")
+                warnings.warn("Datasets have different structures. Returning None. Use input.datasets[i].structure")
                 return None
+
         return self.datasets[0].structure
+
+    #def to_abinit_input(self):
+
+    def yield_figs(self, **kwargs):  # pragma: no cover
+        """
+        This function *generates* a predefined list of matplotlib figures with minimal input from the user.
+        """
+        if not self.has_multi_structures:
+            yield self.structure.plot(show=False)
+            yield self.structure.plot_bz(show=False)
+        else:
+            for dt in self.datasets:
+                yield dt.structure.plot(show=False)
+                yield dt.structure.plot_bz(show=False)
 
     def write_notebook(self, nbpath=None):
         """
@@ -325,17 +347,16 @@ class AbinitInputFile(TextFile, Has_Structure, NotebookWriter):
             nbv.new_code_cell("print(abinp)"),
         ])
 
-        has_multi_structures = self.structure is None
-        if has_multi_structures:
+        if self.has_multi_structures:
             nb.cells.extend([
-                nbv.new_code_cell("""
+                nbv.new_code_cell("""\
 for dataset in inp.datasets:
     print(dataset.structure)"""),
             ])
 
         if self.ndtset > 1:
             nb.cells.extend([
-                nbv.new_code_cell("""
+                nbv.new_code_cell("""\
 for dataset in abinp.datasets:
     print(dataset)"""),
             ])
@@ -351,6 +372,7 @@ class AbinitInputParser(object):
         This function receives a string `s` with the Abinit input and return
         a list of :class:`Dataset` objects.
         """
+        # TODO: Parse PSEUDO section if present!
         # Remove comments from lines.
         lines = []
         for line in s.splitlines():

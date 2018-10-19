@@ -5,7 +5,6 @@ from __future__ import print_function
 import sys
 import os
 import shutil
-import numpy as np
 
 from glob import glob
 from setuptools import find_packages, setup, Extension
@@ -16,38 +15,7 @@ if sys.version[0:3] < '2.7':
     sys.stderr.write("abipy requires Python version 2.7 or above. Exiting.")
     sys.exit(1)
 
-# Install ipython with notebook support.
-with_ipython = False
-#with_ipython = True
-if '--with-ipython' in sys.argv:
-    with_ipython = True
-    sys.argv.remove('--with-ipython')
-
-with_cython = True
-try:
-    from Cython.Distutils import build_ext
-except ImportError:
-    with_cython = False
-
-cmdclass = {}
 ext_modules = []
-
-# Disable cython for the time being.
-with_cexts = False
-if with_cexts:
-    with_cython = False
-    if with_cython:
-        import numpy as np
-        #define_macros = [("CYTHON_TRACE", "1")]
-        ext_modules += [
-            Extension("abipy.extensions.klib", ["abipy/extensions/klib.pyx"], include_dirs=[np.get_include()])
-        ]
-        cmdclass.update({'build_ext': build_ext})
-
-    else:
-        ext_modules += [
-            Extension("abipy.extensions.klib", ["abipy/extensions/klib.c"], include_dirs=[np.get_include()])
-        ]
 
 #-------------------------------------------------------------------------------
 # Useful globals and utility functions
@@ -104,27 +72,41 @@ def find_package_data():
     # This is not enough for these things to appear in an sdist.
     # We need to muck with the MANIFEST to get this to work
     package_data = {
-        'abipy.data': ["cifs/*.cif", "pseudos/*", "runs/*", "refs/*.nc", "variables/*"],
+        'abipy.data': [
+            "cifs/*.cif",
+            "pseudos/*",
+            "hgh_pseudos/*",
+            "runs/*",
+            "managers/*",
+            "refs/*.nc",
+            "refs/*.log",
+            "refs/*.abo",
+        ],
         'abipy.data.refs' : [
+            "al_eph/*",
             "al_g0w0_spfunc/*",
+            "alas_nl_dfpt/*",
             "alas_phonons/*",
+            #"diamond_sigeph/*",
+            "gaas_optic/*",
             "mgb2_fatbands/*",
+            "ni_ebands/*",
             "si_bse/*",
+            "si_bse_kpoints/*",
             "si_ebands/*",
             "si_g0w0/*",
-            ],
-        'abipy.htc': ["*.json"],
+            "sio2_screening/*",
+            "znse_phonons/*",
+        ],
         'abipy.gui.awx' : ['images/*'],
-        'abipy.lessons': ["*.man"],
     }
 
-    #package_data.update(ref_files)
     return package_data
 
 
 def find_exclude_package_data():
     package_data = {
-        'abipy.data' : ["managers", 'benchmarks','runs/flow_*','runs/gspert'],
+        'abipy.data': ["managers", 'benchmarks', 'runs/flow_*', 'runs/gspert'],
     }
     return package_data
 
@@ -137,16 +119,14 @@ def find_scripts():
     """Find abipy scripts."""
     scripts = []
     # All python files in abipy/scripts
-    pyfiles = glob(os.path.join('abipy','scripts',"*.py"))
+    pyfiles = glob(os.path.join('abipy', 'scripts', "*.py"))
     scripts.extend(pyfiles)
     return scripts
 
 
 def get_long_desc():
     with open("README.rst") as f:
-        long_desc = f.read()
-        #ind = long_desc.find("\n")
-        #long_desc = long_desc[ind + 1:]
+        return f.read()
         return long_desc
 
 
@@ -168,36 +148,26 @@ def cleanup():
 
 # List of external packages we rely on.
 # Note setup install will download them from Pypi if they are not available.
+#with open("requirements.txt", "rt") as fh:
+#    install_requires = [s.strip() for s in fh]
+
 install_requires = [
-    "six",
-    "prettytable",
-    "tabulate",
-    "apscheduler==2.1.0",
-    "pydispatcher>=2.0.5",
-    "tqdm",
-    "html2text",
-    "pyyaml>=3.11",
-    "pandas",
-    "numpy>=1.9",
-    "scipy>=0.14",
-    "spglib",
-    "pymatgen>=4.7.2",
-    "netCDF4",
-    "matplotlib>=1.5",
-    "seaborn",
+"six",
+"tabulate",
+"apscheduler==2.1.0",
+"pydispatcher>=2.0.5",
+"tqdm",
+"html2text",
+"pyyaml>=3.11",
+"pandas",
+"numpy",
+"scipy",
+"spglib",
+"pymatgen>=2018.8.7",
+"netCDF4",
+"matplotlib",
+"seaborn",
 ]
-
-if with_ipython:
-    install_requires += [
-        "ipython",
-        "jupyter",
-        "nbformat",
-    ]
-
-#if with_cython:
-#    install_requires += [
-#        "cython",
-#    ]
 
 with_wxpython = False
 if with_wxpython:
@@ -206,20 +176,10 @@ if with_wxpython:
         "wxpython",
     ]
 
-#print("install_requires\n", install_requires)
-
 
 #---------------------------------------------------------------------------
 # Find all the packages, package data, and data_files
 #---------------------------------------------------------------------------
-
-# Get the set of packages to be included.
-my_packages = find_packages(exclude=())
-
-my_scripts = find_scripts()
-
-my_package_data = find_package_data()
-my_excl_package_data = find_exclude_package_data()
 
 # Create a dict with the basic information
 # This dict is eventually passed to setup after additional keys are added.
@@ -228,6 +188,7 @@ setup_args = dict(
       version=version,
       description=description,
       long_description=long_description,
+      long_description_content_type="text/x-rst",
       author=author,
       author_email=author_email,
       maintainer=maintainer,
@@ -238,37 +199,31 @@ setup_args = dict(
       keywords=keywords,
       classifiers=classifiers,
       install_requires=install_requires,
-      packages=my_packages,
-      package_data=my_package_data,
-      exclude_package_data=my_excl_package_data,
-      scripts=my_scripts,
+      packages=find_packages(exclude=()),
+      package_data=find_package_data(),
+      exclude_package_data=find_exclude_package_data(),
+      scripts=find_scripts(),
       download_url=download_url,
       ext_modules=ext_modules,
       )
+
 
 if __name__ == "__main__":
     setup(**setup_args)
 
     print("""
-Please read the following if you are about to use abipy for the first time:
+Please read the following if you are about to use AbiPy for the first time:
 
-[1]
-    abipy needs to know about the cluster/computer you are running on. This information
-    is provided via the manager.yml and scheduler.yml files. These files must be located
-    in ~/.abinit/abipy or in the working directory in which you execute the flow.
-    Examples are provided in abipy/data/managers
+Abipy needs to know about the cluster/computer you are running on. This information
+is provided via the manager.yml and scheduler.yml files.
+These files must be located in ~/.abinit/abipy or in the working directory in which you execute the flow.
+Examples are provided in abipy/data/managers.
+See also the HTML page:
 
-[2]
-    If you are completely new to abipy you may want to start from the abipy lessons.
-    The simplest way is to move to an empty directory, start an ipython session and type:
+    http://abinit.github.io/abipy/workflows/manager_examples.html
 
-    In [1]: from abipy.lessons.lesson_kpoint_convergence import Lesson()
+TIP: Use abicheck.py to validate the final configuration.
 
-followed by:
-
-    In [2]: Lesson()
-
-This will print the lessons documentation with further instructions.
 Have fun!
 """)
 

@@ -23,41 +23,49 @@ ArrayWithUnit = units.ArrayWithUnit
 ####################
 ### Abipy import ###
 ####################
-from abipy.flowtk import Pseudo, PseudoTable, Mrgscr, Mrgddb, Mrggkk, Flow, TaskManager, AbinitBuild, flow_main
-#from pymatgen.io.abinit.flows import (Flow, G0W0WithQptdmFlow, bandstructure_flow, PhononFlow,
-#    g0w0_flow, phonon_flow, phonon_conv_flow, nonlinear_coeff_flow)
-
+from abipy.flowtk import Pseudo, PseudoTable, Mrgscr, Mrgddb, Mrggkk, Flow, Work, TaskManager, AbinitBuild, flow_main
 from abipy.core.release import __version__, min_abinit_version
+from abipy.core.globals import enable_notebook, in_notebook, disable_notebook
 from abipy.core import restapi
-from abipy.core.structure import Lattice, Structure, StructureModifier, frames_from_structures, mp_match_structure, mp_search
+from abipy.core.structure import (Lattice, Structure, StructureModifier, dataframes_from_structures,
+  mp_match_structure, mp_search, cod_search)
 from abipy.core.mixins import CubeFile
+from abipy.core.func1d import Function1D
 from abipy.core.kpoints import set_atol_kdiff
-from abipy.htc.input import AbiInput, LdauParams, LexxParams, input_gen
-from abipy.abio.robots import Robot, GsrRobot, SigresRobot, MdfRobot, DdbRobot, abirobot
+from abipy.abio.robots import Robot
 from abipy.abio.inputs import AbinitInput, MultiDataset, AnaddbInput, OpticInput
 from abipy.abio.abivars import AbinitInputFile
-from abipy.abio.outputs import AbinitLogFile, AbinitOutputFile, OutNcFile #, CubeFile
-from abipy.tools.pandas import print_frame
+from abipy.abio.outputs import AbinitLogFile, AbinitOutputFile, OutNcFile, AboRobot #, CubeFile
+from abipy.tools.printing import print_dataframe
+from abipy.tools.notebooks import print_source, print_doc
+from abipy.tools.plotting import get_ax_fig_plt, get_axarray_fig_plt, get_ax3d_fig_plt #, plot_array, ArrayPlotter
 from abipy.abio.factories import *
 from abipy.electrons.ebands import (ElectronBands, ElectronBandsPlotter, ElectronDos, ElectronDosPlotter,
-    frame_from_ebands)
-from abipy.electrons.gsr import GsrFile
+    dataframe_from_ebands)
+from abipy.electrons.gsr import GsrFile, GsrRobot
 from abipy.electrons.psps import PspsFile
-from abipy.electrons.gw import SigresFile, SigresPlotter
-from abipy.electrons.bse import MdfFile
+from abipy.electrons.ddk import DdkFile
+from abipy.electrons.gw import SigresFile, SigresRobot
+from abipy.electrons.bse import MdfFile, MdfRobot
 from abipy.electrons.scissors import ScissorsBuilder
 from abipy.electrons.scr import ScrFile
-
-from abipy.electrons.denpot import DensityNcFile, VhartreeNcFile, VxcNcFile, VhxcNcFile, PotNcFile, DensityFortranFile
+from abipy.electrons.denpot import (DensityNcFile, VhartreeNcFile, VxcNcFile, VhxcNcFile, PotNcFile,
+    DensityFortranFile, Cut3dDenPotNcFile)
 from abipy.electrons.fatbands import FatBandsFile
-from abipy.dfpt.phonons import (PhbstFile, PhononBands, PhononBandsPlotter, PhdosFile, PhononDosPlotter,
+from abipy.electrons.optic import OpticNcFile, OpticRobot
+from abipy.electrons.fold2bloch import Fold2BlochNcfile
+from abipy.dfpt.phonons import (PhbstFile, PhbstRobot, PhononBands, PhononBandsPlotter, PhdosFile, PhononDosPlotter,
     PhdosReader, phbands_gridplot)
-from abipy.dfpt.ddb import DdbFile
-from abipy.dfpt.anaddbnc import AnaddbNcFile
+from abipy.dfpt.ddb import DdbFile, DdbRobot
+from abipy.dfpt.anaddbnc import AnaddbNcFile, AnaddbNcRobot
 from abipy.dfpt.gruneisen import GrunsNcFile
-from abipy.dynamics.hist import HistFile
+from abipy.dynamics.hist import HistFile, HistRobot
 from abipy.waves import WfkFile
-#from abipy.electrons.sigmaph import SigmaPhFile
+from abipy.eph.a2f import A2fFile, A2fRobot
+from abipy.eph.sigeph import SigEPhFile, SigEPhRobot
+from abipy.eph.eph_plotter import EphPlotter
+from abipy.wannier90 import WoutFile, AbiwanFile, AbiwanRobot
+from abipy.electrons.lobster import CoxpFile, ICoxpFile, LobsterDoscarFile, LobsterInput, LobsterAnalyzer
 
 # Abinit Documentation.
 from abipy.abio.abivars_db import get_abinit_variables, abinit_help, docvar
@@ -84,7 +92,13 @@ ext2file = collections.OrderedDict([
     (".psp8", Pseudo),
     (".pspnc", Pseudo),
     (".fhi", Pseudo),
-    (".xml", Pseudo),
+    ("JTH.xml", Pseudo),
+    (".wout", WoutFile),
+    # Lobster files.
+    ("COHPCAR.lobster", CoxpFile),
+    ("COOPCAR.lobster", CoxpFile),
+    ("ICOHPLIST.lobster", ICoxpFile),
+    ("DOSCAR.lobster", LobsterDoscarFile),
 ])
 
 # Abinit files require a special treatment.
@@ -92,6 +106,7 @@ abiext2ncfile = collections.OrderedDict([
     ("GSR.nc", GsrFile),
     ("DEN.nc", DensityNcFile),
     ("OUT.nc", OutNcFile),
+    ("DDK.nc", DdkFile),
     ("VHA.nc", VhartreeNcFile),
     ("VXC.nc", VxcNcFile),
     ("VHXC.nc", VhxcNcFile),
@@ -104,10 +119,15 @@ abiext2ncfile = collections.OrderedDict([
     ("PHDOS.nc", PhdosFile),
     ("SCR.nc", ScrFile),
     ("SIGRES.nc", SigresFile),
-    #("SIGMAPH.nc", SigmaPhFile),
     ("GRUNS.nc", GrunsNcFile),
     ("MDF.nc", MdfFile),
     ("FATBANDS.nc", FatBandsFile),
+    ("FOLD2BLOCH.nc", Fold2BlochNcfile),
+    ("CUT3DDENPOT.nc", Cut3dDenPotNcFile),
+    ("OPTIC.nc", OpticNcFile),
+    ("A2F.nc", A2fFile),
+    ("SIGEPH.nc", SigEPhFile),
+    ("ABIWAN.nc", AbiwanFile),
 ])
 
 
@@ -132,7 +152,10 @@ def abifile_subclass_from_filename(filename):
     if os.path.basename(filename) == Flow.PICKLE_FNAME:
         return Flow
 
+    from abipy.tools.text import rreplace
     for ext, cls in ext2file.items():
+        # This to support gzipped files.
+        if filename.endswith(".gz"): filename = rreplace(filename, ".gz", "", occurrence=1)
         if filename.endswith(ext): return cls
 
     ext = filename.split("_")[-1]
@@ -142,7 +165,7 @@ def abifile_subclass_from_filename(filename):
         for ext, cls in abiext2ncfile.items():
             if filename.endswith(ext): return cls
 
-    msg = ("No class has been registered for file:\n\t%s\n\nFile extensions supported:\n%s" %
+    msg = ("No class has been registered for file:\n\t%s\n\nFile extensions supported:\n\n%s" %
         (filename, abiopen_ext2class_table()))
     raise ValueError(msg)
 
@@ -151,8 +174,8 @@ def dir2abifiles(top, recurse=True):
     """
     Analyze the filesystem starting from directory `top` and
     return an ordered dictionary mapping the directory name to the list
-    of files supported by `abiopen` contained within that directory.
-    If not `recurse`, children directories are not analyzed.
+    of files supported by ``abiopen`` contained within that directory.
+    If not ``recurse``, children directories are not analyzed.
     """
     dl = collections.defaultdict(list)
 
@@ -173,7 +196,7 @@ def dir2abifiles(top, recurse=True):
 
 def isabifile(filepath):
     """
-    Return True if `filepath` can be opened with `abiopen`.
+    Return True if `filepath` can be opened with ``abiopen``.
     """
     try:
         abifile_subclass_from_filename(filepath)
@@ -190,7 +213,6 @@ def abiopen(filepath):
     Args:
         filepath: string with the filename.
     """
-    #print(filepath)
     if os.path.basename(filepath) == "__AbinitFlow__.pickle":
         return Flow.pickle_load(filepath)
 
@@ -200,6 +222,10 @@ def abiopen(filepath):
     abonum = re.compile(r".+\.abo[\d]+")
     if outnum.match(filepath) or abonum.match(filepath):
         return AbinitOutputFile.from_file(filepath)
+
+    if os.path.basename(filepath) == "log":
+        # Assume Abinit log file.
+        return AbinitLogFile.from_file(filepath)
 
     cls = abifile_subclass_from_filename(filepath)
     return cls.from_file(filepath)
@@ -250,11 +276,11 @@ def software_stack():
     ])
 
     # Optional but strongly suggested.
-    try:
-        import matplotlib
-        d["matplotlib"] = "%s (backend: %s)" % (matplotlib.__version__, matplotlib.get_backend())
-    except ImportError:
-        pass
+    #try:
+    #    import matplotlib
+    #    d["matplotlib"] = "%s (backend: %s)" % (matplotlib.__version__, matplotlib.get_backend())
+    #except ImportError:
+    #    pass
 
     return d
 
@@ -310,8 +336,7 @@ def abicheck(verbose=0):
 
 def abipy_logo1():
     """http://www.text-image.com/convert/pic2ascii.cgi"""
-    return r"""\
-
+    return r"""
                  `:-                                                               -:`
          --`  .+/`                              `                                  `/+.  .-.
    `.  :+.   /s-                   `yy         .yo                                   -s/   :+. .`
@@ -329,7 +354,7 @@ def abipy_logo1():
 
 def abipy_logo2():
     """http://www.text-image.com/convert/pic2ascii.cgi"""
-    return r"""\
+    return r"""
 MMMMMMMMMMMMMMMMNhdMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMdhmMMMMMMMMMMMMMMM
 MMMMMMMMMddNMMmoyNMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMNMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMNyomMMmhmMMMMMMMM
 MMMmmMMhomMMMy/hMMMMMMMMMMMMMMMMMMMN::MMMMMMMMMm:oMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMd+yMMMhomMmmMMM

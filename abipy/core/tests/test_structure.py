@@ -28,14 +28,14 @@ class TestStructure(AbipyTest):
             assert structure.has_abi_spacegroup
 
             # Call pymatgen machinery to get the high-symmetry stars.
-            print(structure.hsym_stars)
+            str(structure.hsym_stars)
 
-            geodict = structure.get_dict4frame()
+            geodict = structure.get_dict4pandas()
             assert geodict["abispg_num"] is not None
 
             # Export data in Xcrysden format.
             #structure.export(self.get_tmpname(text=True, suffix=".xsf"))
-            #visu = structure.visualize("vesta")
+            #visu = structure.visualize(appname="vesta")
             #assert callable(visu)
 
             if self.has_ase():
@@ -46,12 +46,17 @@ class TestStructure(AbipyTest):
         # Test as_structure and from/to abivars
         si = Structure.as_structure(abidata.cif_file("si.cif"))
         assert si.formula == "Si2"
+        assert si.latex_formula == "Si$_{2}$"
         assert si.abi_spacegroup is None and not si.has_abi_spacegroup
+        assert "ntypat" in si.to(fmt="abivars")
 
         spgroup = si.spgset_abi_spacegroup(has_timerev=True)
         assert spgroup is not None
         assert si.has_abi_spacegroup
         assert si.abi_spacegroup.spgid == 227
+        kfrac_coords = si.get_kcoords_from_names(["G", "X", "L", "Gamma"])
+        self.assert_equal(kfrac_coords,
+            ([[0. , 0. , 0. ], [0.5, 0. , 0.5], [0.5, 0.5, 0.5], [0. , 0. , 0. ]]))
 
         with self.assertRaises(TypeError):
             Structure.as_structure({})
@@ -67,6 +72,10 @@ class TestStructure(AbipyTest):
         with self.assertRaises(ValueError):
             si_wfk.spgset_abi_spacegroup(has_timerev=True)
 
+        # K and U are equivalent. [5/8, 1/4, 5/8] should return U
+        assert si_wfk.findname_in_hsym_stars([3/8, 3/8, 3/4]) == "K"
+        assert si_wfk.findname_in_hsym_stars([5/8, 1/4, 5/8]) == "U"
+
         # TODO: Fix order of atoms in supercells.
         # Test __mul__, __rmul__ (should return Abipy structures)
         assert si_wfk == 1 * si_wfk
@@ -77,6 +86,10 @@ class TestStructure(AbipyTest):
         assert si_abi.formula == "Si2"
         self.assert_equal(si_abi.frac_coords, [[0, 0, 0], [0.25, 0.25, 0.25]])
 
+        si_abo = Structure.from_file(abidata.ref_file("refs/si_ebands/run.abo"))
+        assert si_abo == si_abi
+        assert "ntypat" in si_abi.to(fmt="abivars")
+
         znse = Structure.from_file(abidata.ref_file("refs/znse_phonons/ZnSe_hex_qpt_DDB"))
         assert len(znse) == 4
         assert znse.formula == "Zn2 Se2"
@@ -85,6 +98,10 @@ class TestStructure(AbipyTest):
             0.66666666666667,  0.33333333333333, 0.49962203020000,
             0.33333333333333,  0.66666666666667, 0.62537796980000,
             0.66666666666667,  0.33333333333333, 0.12537796980000])
+
+        from abipy.core.structure import diff_structures
+        diff_structures([si_abi, znse], headers=["si_abi", "znse"], fmt="abivars", mode="table")
+        diff_structures([si_abi, znse], headers=["si_abi", "znse"], fmt="abivars", mode="diff")
 
         # From pickle file.
         import pickle
@@ -96,14 +113,20 @@ class TestStructure(AbipyTest):
         same_znse = Structure.as_structure(tmp_path)
         assert same_znse == znse
 
-        for fmt in ["abivars", "cif", "POSCAR", "json", "xsf"]:
+        for fmt in ["abivars", "cif", "POSCAR", "json", "xsf", "qe", "siesta", "wannier90"]:
             assert len(znse.convert(fmt=fmt)) > 0
+
+        for fmt in ["abinit", "w90", "siesta"]:
+            assert len(znse.get_kpath_input_string(fmt=fmt)) > 0
 
         oxi_znse = znse.get_oxi_state_decorated()
         assert len(oxi_znse.abi_string)
         from pymatgen.core.periodic_table import Specie
         assert Specie("Zn", 2) in oxi_znse.composition.elements
         assert Specie("Se", -2) in oxi_znse.composition.elements
+
+        system = si.spget_lattice_type()
+        assert system == "cubic"
 
         e = si.spget_equivalent_atoms(printout=True)
         assert len(e.irred_pos) == 1
@@ -113,9 +136,16 @@ class TestStructure(AbipyTest):
         assert "equivalent_atoms" in e.spgdata
 
         if self.has_matplotlib():
-            si.show_bz(show=False)
-            si.show_bz(pmg_path=False, show=False)
-            si.plot_xrd(show=False)
+            assert si.plot_bz(show=False)
+            assert si.plot_bz(pmg_path=False, show=False)
+            assert si.plot(show=False)
+            if sys.version[0:3] > '2.7':
+                # pmg broke py compatibility
+                assert si.plot_xrd(show=False)
+
+        if self.has_mayavi():
+            #assert si.vtkview(show=False)  # Disabled due to (core dumped) on travis
+            assert si.mayaview(show=False)
 
         assert si is Structure.as_structure(si)
         assert si == Structure.as_structure(si.to_abivars())
@@ -132,8 +162,39 @@ class TestStructure(AbipyTest):
         self.assert_equal(ksamp.ngkpt, [10, 10, 10])
         self.assert_equal(ksamp.shiftk, shiftk)
 
-        si = Structure.from_material_id("mp-149")
+        lif = Structure.from_abistring("""
+acell      7.7030079150    7.7030079150    7.7030079150 Angstrom
+rprim      0.0000000000    0.5000000000    0.5000000000
+           0.5000000000    0.0000000000    0.5000000000
+           0.5000000000    0.5000000000    0.0000000000
+natom      2
+ntypat     2
+typat      1 2
+znucl      3 9
+xred       0.0000000000    0.0000000000    0.0000000000
+           0.5000000000    0.5000000000    0.5000000000
+""")
+        assert lif.formula == "Li1 F1"
+        same = Structure.rocksalt(7.7030079150, ["Li", "F"], units="ang")
+        self.assert_almost_equal(lif.lattice.a,  same.lattice.a)
+
+        si = Structure.from_mpid("mp-149")
         assert si.formula == "Si2"
+
+        # Test abiget_spginfo
+        d = si.abiget_spginfo(tolsym=None, pre="abi_")
+        assert d["abi_spg_symbol"] == "Fd-3m"
+        assert d["abi_spg_number"] == 227
+        assert d["abi_bravais"] == "Bravais cF (face-center cubic)"
+
+        llzo = Structure.from_file(abidata.cif_file("LLZO_oxi.cif"))
+        assert llzo.is_ordered
+        d = llzo.abiget_spginfo(tolsym=0.001)
+        assert d["spg_number"] == 142
+
+        mgb2_cod = Structure.from_cod_id(1526507, primitive=True)
+        assert mgb2_cod.formula == "Mg1 B2"
+        assert mgb2_cod.spget_lattice_type() == "hexagonal"
 
         mgb2 = abidata.structure_from_ucell("MgB2")
         if self.has_ase():
@@ -141,18 +202,27 @@ class TestStructure(AbipyTest):
 
         assert [site.species_string for site in mgb2.get_sorted_structure_z()] == ["B", "B", "Mg"]
 
+        s2inds = mgb2.get_symbol2indices()
+        self.assert_equal(s2inds["Mg"], [0])
+        self.assert_equal(s2inds["B"], [1, 2])
+
+        s2coords = mgb2.get_symbol2coords()
+        self.assert_equal(s2coords["Mg"], [[0, 0, 0]])
+        self.assert_equal(s2coords["B"],  [[1/3, 2/3, 0.5], [2/3, 1/3, 0.5]])
+
         # TODO: This part should be tested more carefully
         mgb2.abi_sanitize()
         mgb2.abi_sanitize(primitive_standard=True)
         mgb2.get_conventional_standard_structure()
         assert len(mgb2.abi_string)
-        assert len(mgb2.spglib_summary(verbose=10))
-        #print(structure.__repr_html__())
+        assert len(mgb2.spget_summary(verbose=10))
+        #print(structure._repr_html_())
 
         self.serialize_with_pickle(mgb2)
 
         pseudos = abidata.pseudos("12mg.pspnc", "5b.pspnc")
-        assert mgb2.num_valence_electrons(pseudos) == 8
+        nv = mgb2.num_valence_electrons(pseudos)
+        assert nv == 8 and isinstance(nv , int)
         assert mgb2.valence_electrons_per_atom(pseudos) == [2, 3, 3]
         self.assert_equal(mgb2.calc_shiftk() , [[0.0, 0.0, 0.5]])
 
@@ -166,23 +236,48 @@ class TestStructure(AbipyTest):
         #assert len(batom.cart_coords) == 1
         #self.assert_equal(batom.cart_coords[0], [1, 2, 3])
 
-        #bcc_prim = Structure.bcc(10, ["Si"], primitive=True)
-        #bcc_conv = Structure.bcc(10, ["Si"], primitive=False)
-        #fcc_prim = Structure.bcc(10, ["Si"], primitive=True)
-        #fcc_conv = Structure.bcc(10, ["Si"], primitive=False)
-        #rock = Structure.rocksalt(10, ["Na", "Cl"])
-        #perov = Structure.ABO3(10, ["A", "B", "O", "O", "O"])
+        # Function to compute cubic a0 from primitive v0 (depends on struct_type)
+        vol2a = {"fcc": lambda vol: (4 * vol) ** (1/3.),
+                 "bcc": lambda vol: (2 * vol) ** (1/3.),
+                 "zincblende": lambda vol: (4 * vol) ** (1/3.),
+                 "rocksalt": lambda vol: (4 * vol) ** (1/3.),
+                 "ABO3": lambda vol: vol ** (1/3.),
+                 "hH": lambda vol: (4 * vol) ** (1/3.),
+                 }
+
+        a = 10
+        bcc_prim = Structure.bcc(a, ["Si"], primitive=True)
+        assert len(bcc_prim) == 1
+        self.assert_almost_equal(a, vol2a["bcc"](bcc_prim.volume))
+        bcc_conv = Structure.bcc(a, ["Si"], primitive=False)
+        assert len(bcc_conv) == 2
+        self.assert_almost_equal(a**3, bcc_conv.volume)
+        fcc_prim = Structure.fcc(a, ["Si"], primitive=True)
+        assert len(fcc_prim) == 1
+        self.assert_almost_equal(a, vol2a["fcc"](fcc_prim.volume))
+        fcc_conv = Structure.fcc(a, ["Si"], primitive=False)
+        assert len(fcc_conv) == 4
+        self.assert_almost_equal(a**3, fcc_conv.volume)
+        zns = Structure.zincblende(a / bohr_to_ang, ["Zn", "S"], units="bohr")
+        self.assert_almost_equal(a, vol2a["zincblende"](zns.volume))
+        rock = Structure.rocksalt(a, ["Na", "Cl"])
+        assert len(rock) == 2
+        self.assert_almost_equal(a, vol2a["rocksalt"](rock.volume))
+        perov = Structure.ABO3(a, ["Ca", "Ti", "O", "O", "O"])
+        assert len(perov) == 5
+        self.assert_almost_equal(a**3, perov.volume)
 
         # Test notebook generation.
         if self.has_nbformat():
-            mgb2.write_notebook(nbpath=self.get_tmpname(text=True))
+            assert mgb2.write_notebook(nbpath=self.get_tmpname(text=True))
 
-    def test_frames_from_structures(self):
-        """Testing frames from structures."""
+    def test_dataframes_from_structures(self):
+        """Testing dataframes from structures."""
         mgb2 = abidata.structure_from_ucell("MgB2")
         sic = abidata.structure_from_ucell("SiC")
         alas = abidata.structure_from_ucell("AlAs")
-        dfs = frames_from_structures([mgb2, sic, alas], index=None, with_spglib=True, cart_coords=False)
+        dfs = dataframes_from_structures([mgb2, sic, alas], index=None, with_spglib=True, cart_coords=True)
+        dfs = dataframes_from_structures([mgb2, sic, alas], index=None, with_spglib=True, cart_coords=False)
 
         assert dfs.lattice is not None
         assert dfs.coords is not None
@@ -216,43 +311,35 @@ class TestStructure(AbipyTest):
         structure.write_vib_file(sys.stdout, qpoint, 0.1*np.array([[1, 1, 1], [1, 1, 1]]),
                                  do_real=True, frac_coords=False, max_supercell=mx_sc, scale_matrix=scale_matrix)
 
-        structure.write_vib_file(sys.stdout, qpoint, 0.1*np.array([[1, 1, 1], [-1, -1, -1]]),
+        displ = np.array([[1, 1, 1], [-1, -1, -1]])
+        structure.write_vib_file(sys.stdout, qpoint, 0.1 * displ,
                                  do_real=True, frac_coords=False, max_supercell=mx_sc, scale_matrix=scale_matrix)
 
-        structure.write_vib_file(sys.stdout, qpoint, 0.1*np.array([[1, 1, 1], [-1, -1, -1]]),
+        structure.write_vib_file(sys.stdout, qpoint, 0.1 * displ,
                                  do_real=True, frac_coords=False, max_supercell=mx_sc, scale_matrix=None)
 
-        structure.frozen_phonon(qpoint, 0.1*np.array([[1, 1, 1], [-1, -1, -1]]),
-                                do_real=True, frac_coords=False, max_supercell=mx_sc, scale_matrix=scale_matrix)
+        fp_data = structure.frozen_phonon(qpoint, 0.1 * displ, eta=0.5, frac_coords=False,
+                                          max_supercell=mx_sc, scale_matrix=scale_matrix)
 
-        # We should add some checks here
-        #structure.frozen_phonon(qpoint, 0.1*np.array([[1, 1, 1], [-1, -1, -1]]),
-        #                        do_real=True, frac_coords=False, max_supercell=mx_sc, scale_matrix=None)
+        max_displ = np.linalg.norm(displ, axis=1).max()
+        self.assertArrayAlmostEqual(fp_data.structure[0].coords,
+                                    structure[0].coords + 0.5*displ[0]/max_displ)
+        self.assertArrayAlmostEqual(fp_data.structure[8].coords,
+                                    structure[1].coords + 0.5*displ[1]/max_displ)
+
+        displ2 = np.array([[1, 0, 0], [0, 1, 1]])
+
+        f2p_data = structure.frozen_2phonon(qpoint, 0.05 * displ, 0.02*displ2, eta=0.5, frac_coords=False,
+                                           max_supercell=mx_sc, scale_matrix=scale_matrix)
+
+        d_tot = 0.05*displ+0.02*displ2
+        max_displ = np.linalg.norm(d_tot, axis=1).max()
+        self.assertArrayAlmostEqual(f2p_data.structure[0].coords,
+                                    structure[0].coords + 0.5*d_tot[0]/max_displ)
+        self.assertArrayAlmostEqual(f2p_data.structure[8].coords,
+                                    structure[1].coords + 0.5*d_tot[1]/max_displ)
 
         #print("Structure = ", structure)
         #print(structure.lattice._matrix)
         #for site in structure:
         #    print(structure.lattice.get_cartesian_coords(site.frac_coords))
-
-
-class TestMpRestApi(AbipyTest):
-
-    def test_mprestapi(self):
-        """Testing MP Rest API wrappers."""
-        from abipy import abilab
-        # Test mp_search
-        mp = abilab.mp_search("MgB2")
-        repr(mp); str(mp)
-        assert mp.structures
-        assert "mp-763" in mp.mpids
-        assert len(mp.structures) == len(mp.data)
-        assert hasattr(mp.table, "describe")
-        mp.print_results(fmt="abivars", verbose=2)
-
-        # Test mp_match_structure
-        mp = abilab.mp_match_structure(abidata.cif_file("al.cif"))
-        repr(mp); str(mp)
-        assert mp.structures
-        assert "mp-134" in mp.mpids
-        assert mp.data is None and mp.table is None
-        mp.print_results(fmt="abivars", verbose=2)

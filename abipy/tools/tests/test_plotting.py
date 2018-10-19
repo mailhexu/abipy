@@ -2,8 +2,11 @@
 """Tests for derivatives module."""
 from __future__ import division, print_function, absolute_import, unicode_literals
 
+import os
 import numpy as np
 
+from abipy import abilab
+import abipy.data as abidata
 from abipy.tools.plotting import *
 from abipy.core.testing import AbipyTest
 
@@ -31,21 +34,46 @@ class TestPlotting(AbipyTest):
         assert left_right == (1, 2)
 
     def test_data_from_cplx_mode(self):
-        """Testing data_from_cplx_mode."""
+        """Testing plot_array."""
         carr = np.empty((2, 4), dtype=np.complex)
-
-        self.assert_equal(data_from_cplx_mode("re", carr), carr.real)
-        self.assert_equal(data_from_cplx_mode("im", carr), carr.imag)
-        self.assert_equal(data_from_cplx_mode("abs", carr), np.abs(carr))
-        self.assert_equal(data_from_cplx_mode("angle", carr), np.angle(carr))
-        with self.assertRaises(ValueError):
-            data_from_cplx_mode("foo", carr)
-
-        # Test plot_array
         if self.has_matplotlib():
             assert plot_array(carr, cplx_mode="abs", show=False)
             cvec = np.empty(10, dtype=np.complex)
             assert plot_array(cvec, cplx_mode="im", show=False)
+
+    def test_plot_xy_with_hue(self):
+        """Testing plot_xy_with_hue."""
+        # Here is some sample data. The 'x2' data is slightly offset from 'x1'
+        x1 = list(range(0, 100, 10))
+        x2 = list(range(1, 100, 10))
+        x = x1 + x2
+
+        #The y-values I generate here mimic the general shape of my actual data
+        y1 = x1[::-1]
+        y2 = [i+25 for i in x1[::-1]]
+        y = y1 + y2
+
+        # Two levels of labels that will be applied to the data
+        z1 = ["1"] * 10
+        z2 = ["2"] * 10
+        z = z1 + z2
+
+        # A pandas data frame from the above data
+        import pandas as pd
+        df = pd.DataFrame({'x': x, 'y': y, 'z': z})
+
+        from abipy.tools.plotting import plot_xy_with_hue
+        if self.has_matplotlib():
+            assert plot_xy_with_hue(data=df, x="x", y="y", hue="z", ax=None, show=False)
+            assert plot_xy_with_hue(data=df, x="x", y="y", hue="z", ax=None, show=False,
+                                    color="red", marker="v")
+            assert plot_xy_with_hue(data=df, x="x", y="y", hue="z", decimals=0, ax=None, show=False,
+                                    color="red", marker="v")
+            with self.assertRaises(ValueError):
+                plot_xy_with_hue(data=df, x="foo", y="y", hue="bar", ax=None, show=False)
+
+            assert plot_xy_with_hue(data=df, x="x", y=["y", "y"], hue="z", decimals=0, ax=None, show=False,
+                                    color="red", marker="v")
 
     def test_array_plotter(self):
         """Testing array plotter."""
@@ -53,6 +81,7 @@ class TestPlotting(AbipyTest):
         assert len(plotter) == 0
         hello = np.ones((5, 2), dtype=np.complex)
         plotter.add_array("hello", hello)
+        assert "hello" in plotter.keys()
         with self.assertRaises(ValueError):
             plotter.add_array("hello", hello)
 
@@ -87,3 +116,41 @@ class TestPlotting(AbipyTest):
         with self.assertRaises(TypeError):
             x.append(-1)
             marker.extend((x, y, s))
+
+    def test_plot_cell_tools(self):
+        """Testing plot_unit_cell."""
+        lattice = abilab.Lattice.hexagonal(a=2, c=4)
+
+        if self.has_matplotlib():
+            fig, ax = plot_unit_cell(lattice, ax=None, linestyle="-")
+            assert hasattr(fig, "show")
+
+    def test_generic_data_file_plotter(self):
+        """Testing GenericDataFilePlotter object."""
+        filepath = os.path.join(abidata.dirpath, "refs", "sio2_screening", "sio2_EM1_NLF")
+        plotter = GenericDataFilePlotter(filepath)
+        assert plotter.to_string(verbose=2)
+        assert str(plotter)
+        assert len(plotter.od) == 1
+        key = "# Omega [eV] Re epsilon_M IM eps_M"
+        assert key in plotter.od
+        assert plotter.od[key].shape == (3, 30)
+
+        if self.has_matplotlib():
+            assert plotter.plot(show=False)
+            assert plotter.plot(use_index=True, show=False)
+
+    def test_generic_data_files_plotter(self):
+        """Testing GenericDataFilesPlotter object."""
+        filepaths = [
+                os.path.join(abidata.dirpath, "refs", "sio2_screening", "sio2_EM1_NLF"),
+                os.path.join(abidata.dirpath, "refs", "sio2_screening", "sio2_EM1_NLF"),
+        ]
+
+        plotter = GenericDataFilesPlotter.from_files(filepaths)
+        assert plotter.to_string(verbose=2)
+        assert str(plotter)
+
+        if self.has_matplotlib():
+            assert plotter.plot(show=False)
+            assert plotter.plot(use_index=True, show=False)

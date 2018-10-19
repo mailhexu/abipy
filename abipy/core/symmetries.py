@@ -11,14 +11,17 @@ import numpy as np
 import spglib
 
 from six.moves import cStringIO
-from tabulate import tabulate
+
 from monty.string import is_string
 from monty.itertools import iuptri
-
 from monty.functools import lazy_property
+from monty.collections import dict2namedtuple
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.serializers.pickle_coders import SlotPickleMixin
-from abipy.core.kpoints import wrap_to_ws, issamek
+try:
+    from pymatgen.util.serialization import SlotPickleMixin
+except:
+    from pymatgen.serializers.pickle_coders import SlotPickleMixin
+from abipy.core.kpoints import wrap_to_ws, issamek, has_timrev_from_kptopt
 from abipy.iotools import as_etsfreader
 
 
@@ -57,7 +60,7 @@ def mati3inv(mat3, trans=True):
         mat3: (3, 3) matrix-like object with integer elements
 
     Returns:
-        `ndarray` with the TRANSPOSE of the inverse of mat3 if trans==True.
+        |numpy-array| with the TRANSPOSE of the inverse of mat3 if trans==True.
         If trans==False, the inverse of mat3 is returned.
 
     .. note::
@@ -65,13 +68,13 @@ def mati3inv(mat3, trans=True):
        Used for symmetry operations. This function applies to *ORTHOGONAL* matrices only.
        Since these form a group, inverses are also integer arrays.
     """
-    mat3 = np.array(mat3)
-    if mat3.dtype not in (np.int, np.int8, np.int16, np.int32, np.int64):
-        raise TypeError("Expecting integer matrix but received dtype %s" % mat3.dtype)
-    if mat3.shape != (3, 3):
-        raise TypeError("Expecting (3, 3) matrix but received shape %s" % str(mat3.shape))
+    mat3 = np.reshape(np.array(mat3, dtype=np.int), (3, 3))
+    #if mat3.dtype not in (np.int, np.int8, np.int16, np.int32, np.int64):
+    #    raise TypeError("Expecting integer matrix but received dtype %s" % mat3.dtype)
+    #if mat3.shape != (3, 3):
+    #    raise TypeError("Expecting (3, 3) matrix but received shape %s" % str(mat3.shape))
 
-    mit = np.empty((3,3), dtype=np.int)
+    mit = np.empty((3, 3), dtype=np.int)
     mit[0,0] = mat3[1,1] * mat3[2,2] - mat3[2,1] * mat3[1,2]
     mit[1,0] = mat3[2,1] * mat3[0,2] - mat3[0,1] * mat3[2,2]
     mit[2,0] = mat3[0,1] * mat3[1,2] - mat3[1,1] * mat3[0,2]
@@ -116,7 +119,7 @@ def _get_det(mat):
 class Operation(object):
     """
     Abstract base class that defines the methods that must be
-    implememted by the concrete class representing some sort of operation
+    implemented by the concrete class representing some sort of operation
     """
     @abc.abstractmethod
     def __eq__(self, other):
@@ -144,6 +147,17 @@ class Operation(object):
     @abc.abstractproperty
     def isE(self):
         """True if self is the identity operator"""
+
+    #def commute(self, other)
+    #    return self * other == other * self
+
+    #def commutator(self, other)
+    #    return self * other - other * self
+
+    #def anticommute(self, other)
+    #    return self * other == - other * self
+
+    #def direct_product(self, other)
 
 
 class SymmOp(Operation, SlotPickleMixin):
@@ -233,18 +247,33 @@ class SymmOp(Operation, SlotPickleMixin):
                 self.afm_sign == 1)
     # end operator protocol.
 
+    #@lazy_property
+    #def order(self):
+    #    """Order of the operation."""
+    #    n = 0
+    #    o = self
+    #    while m < 1000:
+    #        if o.isE: return n
+    #        n += 1
+    #        o = self * o
+    #    else:
+    #        raise ValueError("Cannot find order")
+
     def __repr__(self):
         return str(self)
 
     def __str__(self):
+        return self.to_string()
+
+    def to_string(self, verbose=0):
         def vec2str(vec):
             return "%2d,%2d,%2d" % tuple(v for v in vec)
 
         s = ""
         for i in range(3):
-            s +=  "[" + vec2str(self.rot_r[i]) + ", %.3f]  " % self.tau[i] + "[" + vec2str(self.rot_g[i]) + "] "
-            if i == 0:
-                s += " time_sign=%2d, afm_sign=%2d, det=%2d" % (self.time_sign, self.afm_sign, self.det)
+            s += "[" + vec2str(self.rot_r[i]) + ", %.3f]  " % self.tau[i] + "[" + vec2str(self.rot_g[i]) + "] "
+            if i == 2:
+                s += ", time_sign = %+1d, afm_sign = %+1d, det = %+1d" % (self.time_sign, self.afm_sign, self.det)
             s += "\n"
 
         return s
@@ -425,7 +454,7 @@ class OpSequence(collections.Sequence):
             return -1
 
     def is_group(self):
-        """True if the list of operations represent a group."""
+        """True if this set of operations represent a group."""
         check = 0
 
         # Identity must be present.
@@ -448,7 +477,7 @@ class OpSequence(collections.Sequence):
         return check == 0
 
     def is_commutative(self):
-        """True if operations in self commute with each other."""
+        """True if all operations commute with each other."""
         for op1, op2 in iuptri(self, diago=False):
             if op1 * op2 != op2 * op1:
                 return False
@@ -456,7 +485,7 @@ class OpSequence(collections.Sequence):
         return True
 
     def is_abelian_group(self):
-        """True if self is a commutative group."""
+        """True if commutative group."""
         return self.is_commutative() and self.is_group()
 
     def asdict(self):
@@ -465,6 +494,15 @@ class OpSequence(collections.Sequence):
         the values are the indices of the operations in the iterable.
         """
         return {op: idx for idx, op in enumerate(self)}
+
+    #def is_subset(self, other)
+    #    indmap = {}
+    #    for i, op in self:
+    #        j = other.find(op)
+    #        if j != -1: indmap[i] = j
+    #    return indmap
+
+    #def is_superset(self, other)
 
     @lazy_property
     def mult_table(self):
@@ -549,7 +587,7 @@ class AbinitSpaceGroup(OpSequence):
     def __init__(self, spgid, symrel, tnons, symafm, has_timerev, inord="C"):
         """
         Args:
-            spgid: space group number (from 1 to 232, 0 if cannot be specified).
+            spgid (int): space group number (from 1 to 232, 0 if cannot be specified).
             symrel: (nsym,3,3) array with the rotational part of the symmetries in real
                 space (reduced coordinates are assumed, see also `inord` for the order.
             tnons: (nsym,3) array with fractional translation in reduced coordinates.
@@ -605,11 +643,13 @@ class AbinitSpaceGroup(OpSequence):
         """Initialize the object from a Netcdf file."""
         r, closeit = as_etsfreader(ncfile)
 
+        kptopt = int(r.read_value("kptopt", default=1))
+
         new = cls(spgid=r.read_value("space_group"),
                   symrel=r.read_value("reduced_symmetry_matrices"),
                   tnons=r.read_value("reduced_symmetry_translations"),
                   symafm=r.read_value("symafm"),
-                  has_timerev=True,  # FIXME not treated by ETSF-IO.
+                  has_timerev=has_timrev_from_kptopt(kptopt),
                   inord=inord)
 
         if closeit:
@@ -620,10 +660,10 @@ class AbinitSpaceGroup(OpSequence):
     @classmethod
     def from_structure(cls, structure, has_timerev=True, symprec=1e-5, angle_tolerance=5):
         """
-        Takes a :class:`Structure` object. Uses spglib to perform various symmetry finding operations.
+        Takes a |Structure| object. Uses spglib to perform various symmetry finding operations.
 
         Args:
-            structure: :class:`Structure` object
+            structure: |Structure| object
             has_timerev: True is time-reversal symmetry is included.
             symprec: Tolerance for symmetry finding
             angle_tolerance: Angle tolerance for symmetry finding.
@@ -730,6 +770,29 @@ class AbinitSpaceGroup(OpSequence):
 
         return tuple(symmops)
 
+    def symeq(self, k1_frac_coords, k2_frac_coords, atol=None):
+        """
+        Test whether two k-points in fractional coordinates are symmetry equivalent
+        i.e. if there's a symmetry operations TO (including time-reversal T, if present)
+	such that::
+
+            TO(k1) = k2 + G0
+
+	Return: namedtuple with::
+
+            isym: The index of the symmetry operation such that TS(k1) = k2 + G0
+                Set to -1 if k1 and k2 are not related by symmetry.
+            op: Symmetry operation.
+            g0: numpy vector.
+        """
+        for isym, sym in enumerate(self):
+            sk_coords = sym.rotate_k(k1_frac_coords, wrap_tows=False)
+            if issamek(sk_coords, k2_frac_coords, atol=atol):
+                g0 = sym.rotate_k(k1_frac_coords) - k2_frac_coords
+                return dict2namedtuple(isym=isym, op=self[isym], g0=g0)
+
+        return dict2namedtuple(isym=-1, op=None, g0=None)
+
     def find_little_group(self, kpoint):
         """
         Find the little group of the kpoint.
@@ -795,7 +858,6 @@ class LittleGroup(OpSequence):
         """
         True if the k-point is on the border of the BZ.
         """
-        from abipy.core.kpoints import wrap_to_ws
         frac_coords = np.array(self.kpoint)
         kreds = wrap_to_ws(frac_coords)
         diff = np.abs(np.abs(kreds) - 0.5)
@@ -819,7 +881,7 @@ class LittleGroup(OpSequence):
 
         # Add character_table from Bilbao database.
         bilbao_ptgrp = bilbao_ptgroup(self.kgroup.sch_symbol)
-        lines.extend(l.strip() for l in bilbao_ptgrp.to_string().splitlines())
+        app(bilbao_ptgrp.to_string(verbose=verbose))
         app("")
 
         # Write warning if non-symmorphic little group with k-point at zone border.
@@ -878,7 +940,7 @@ class LatticeRotation(Operation):
 
     .. note::
 
-        This object is immutable and therefore we do not inherit from `ndarray``
+        This object is immutable and therefore we do not inherit from |numpy-array|.
     """
     _E3D = np.identity(3,  np.int)
 
@@ -945,11 +1007,11 @@ class LatticeRotation(Operation):
         return self.__class__(-self.mat)
 
     def __pow__(self, intexp, modulo=1):
-       if intexp ==  0: return self.__class__(self._E3D)
-       if intexp  >  0: return self.__class__(self.mat ** intexp)
-       if intexp == -1: return self.inverse()
-       if intexp  <  0: return self.__pow__(-intexp).inverse()
-       raise TypeError("type %s is not supported in __pow__" % type(intexp))
+        if intexp ==  0: return self.__class__(self._E3D)
+        if intexp  >  0: return self.__class__(self.mat ** intexp)
+        if intexp == -1: return self.inverse()
+        if intexp  <  0: return self.__pow__(-intexp).inverse()
+        raise TypeError("type %s is not supported in __pow__" % type(intexp))
 
     @property
     def order(self):
@@ -1043,6 +1105,9 @@ class LatticeRotation(Operation):
     #    return t
 
 
+# TODO: Need to find an easy way to map classes in internal database
+# onto classes computed by client code when calculation has been done
+# with non-conventional settings (spglib?)
 class Irrep(object):
     """
     This object represents an irreducible representation.
@@ -1086,6 +1151,9 @@ class Irrep(object):
     @property
     def character(self):
         return self._character
+
+    #@lazy_property
+    #def dataframe(self):
 
 
 def bilbao_ptgroup(sch_symbol):
@@ -1154,29 +1222,58 @@ class BilbaoPointGroup(object):
         """List with the names of the irreps."""
         return list(self.irreps_by_name.keys())
 
-    @property
+    @lazy_property
     def character_table(self):
-        """Table of strings with the character of the irreps."""
+        """
+        Dataframe with irreps.
+        """
         # 1st row: ptgroup_name class names and multiplicity of each class
+        #name_mult = [name + " [" + str(mult) + "]" for (name, mult) in zip(self.class_names, self.class_len)]
+        #table = [[self.sch_symbol] + name_mult]
+        #app = table.append
+
+        ## Add row: irrep_name, character.
+        #for irrep in self.irreps:
+        #    character = list(map(str, irrep.character))
+        #    app([irrep.name] + character)
+
+        #from tabulate import tabulate
+        #s = tabulate(table[1:], headers=table[0], tablefmt="simple", numalign="left")
+        #print(s)
+
+        # Caveat: class names are not necessarly unique --> use np.stack
+        import pandas as pd
         name_mult = [name + " [" + str(mult) + "]" for (name, mult) in zip(self.class_names, self.class_len)]
-        table = [[self.sch_symbol] + name_mult]
-        app = table.append
+        columns = ["name"] + name_mult
 
-        # Add row: irrep_name, character.
-        for irrep in self.irreps:
-            character = list(map(str, irrep.character))
-            app([irrep.name] + character)
+        stack = np.stack([irrep.character for irrep in self.irreps])
+        index = [irrep.name for irrep in self.irreps]
+        df = pd.DataFrame(stack, columns=name_mult, index=index)
+        df.index.name = "Irrep"
+        df.columns.name = self.sch_symbol
 
-        return table
+	# TODO
+        #print(df)
+        # Convert complex --> real if all entries in a colums are real.
+        #for k in name_mult:
+        #    if np.all(np.isreal(df[k].values)):
+        #        #df[k] = df[k].values.real
+        #        df[k] = df[k].astype(float)
 
-    def to_string(self, tablefmt="simple", numalign="left"):
+        return df
+
+    def to_string(self, verbose=0):
         """
-        Write a string with the character_table to the given `stream`.
-        `tablefmt` and `numalign` options are passed to `tabulate`.
+        Return string with the character_table
         """
-        s = tabulate(self.character_table[1:], headers=self.character_table[0],
-                     tablefmt=tablefmt, numalign=numalign)
-        return s
+        return self.character_table.to_string()
+
+    #def decompose(self, character):
+    #   od = collections.OrderedDict()
+    #   for irrep in self.irreps:
+    #       irrep.name
+    #       irrep.character
+    #   return od
 
     #def show_irrep(self, irrep_name):
     #    """Show the mapping rotation --> irrep mat."""
